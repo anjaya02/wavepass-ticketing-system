@@ -7,10 +7,8 @@ import axios from "axios";
 import { useSocket } from "../context/SocketContext";
 import socketEvents from "../utils/socketEvents";
 import {
-  InitialData,
   TicketUpdate,
   VendorReleasedTickets,
-  PurchaseSuccess,
   PurchaseFailure,
   TicketRefunded,
   SystemStatus,
@@ -42,7 +40,6 @@ interface State {
 }
 
 type Action =
-  | { type: 'SET_INITIAL_DATA'; payload: InitialData }
   | { type: 'UPDATE_AVAILABLE_TICKETS'; payload: number }
   | { type: 'UPDATE_SOLD_TICKETS'; payload: number }
   | { type: 'UPDATE_VENDOR_RELEASED_TICKETS'; payload: number }
@@ -52,13 +49,6 @@ type Action =
 
 const reducer = (state: State, action: Action): State => {
   switch (action.type) {
-    case 'SET_INITIAL_DATA':
-      return {
-        ...state,
-        availableTickets: action.payload.availableTickets,
-        soldTickets: 0,
-        vendorReleasedTickets: 0,
-      };
     case 'UPDATE_AVAILABLE_TICKETS':
       return {
         ...state,
@@ -217,15 +207,6 @@ const VendorDashboard: React.FC = () => {
   }, [addLog]);
 
   // Define socket event handlers using useCallback to prevent re-creation
-  const handleInitialData = useCallback(
-    (data: InitialData) => {
-      dispatch({ type: 'SET_INITIAL_DATA', payload: data });
-      addLog(`Initial data received: ${data.availableTickets} tickets available.`);
-      setIsLoading(false);
-    },
-    [addLog]
-  );
-
   const handleTicketUpdate = useCallback(
     (data: TicketUpdate) => {
       dispatch({ type: 'UPDATE_AVAILABLE_TICKETS', payload: data.availableTickets });
@@ -240,22 +221,6 @@ const VendorDashboard: React.FC = () => {
       dispatch({ type: 'UPDATE_AVAILABLE_TICKETS', payload: data.availableTickets });
       addLog(data.message);
       fetchTotalReleasedTicketsCount();
-    },
-    [addLog, fetchTotalReleasedTicketsCount]
-  );
-
-  const handlePurchaseSuccess = useCallback(
-    (data: PurchaseSuccess) => {
-      console.log("Received PURCHASE_SUCCESS:", data);
-      const numPurchased = data.ticketIds.length;
-
-      dispatch({ type: 'UPDATE_AVAILABLE_TICKETS', payload: data.availableTickets });
-      dispatch({ type: 'UPDATE_SOLD_TICKETS', payload: numPurchased });
-      dispatch({ type: 'UPDATE_VENDOR_RELEASED_TICKETS', payload: -numPurchased });
-
-      fetchTotalReleasedTicketsCount();
-
-      addLog(`${numPurchased} tickets sold.`);
     },
     [addLog, fetchTotalReleasedTicketsCount]
   );
@@ -320,10 +285,8 @@ const VendorDashboard: React.FC = () => {
       console.log("Socket disconnected.");
     });
 
-    socket.on(socketEvents.INITIAL_DATA, handleInitialData);
     socket.on(socketEvents.TICKET_UPDATE, handleTicketUpdate);
     socket.on(socketEvents.VENDOR_RELEASED_TICKETS, handleVendorReleasedTickets);
-    socket.on(socketEvents.PURCHASE_SUCCESS, handlePurchaseSuccess);
     socket.on(socketEvents.PURCHASE_FAILURE, handlePurchaseFailure);
     socket.on(socketEvents.TICKET_REFUNDED, handleTicketRefunded);
     socket.on(socketEvents.SYSTEM_STATUS, handleSystemStatus);
@@ -331,10 +294,8 @@ const VendorDashboard: React.FC = () => {
 
     // Cleanup listeners on unmount
     return () => {
-      socket.off(socketEvents.INITIAL_DATA, handleInitialData);
       socket.off(socketEvents.TICKET_UPDATE, handleTicketUpdate);
       socket.off(socketEvents.VENDOR_RELEASED_TICKETS, handleVendorReleasedTickets);
-      socket.off(socketEvents.PURCHASE_SUCCESS, handlePurchaseSuccess);
       socket.off(socketEvents.PURCHASE_FAILURE, handlePurchaseFailure);
       socket.off(socketEvents.TICKET_REFUNDED, handleTicketRefunded);
       socket.off(socketEvents.SYSTEM_STATUS, handleSystemStatus);
@@ -344,10 +305,8 @@ const VendorDashboard: React.FC = () => {
     };
   }, [
     socket,
-    handleInitialData,
     handleTicketUpdate,
     handleVendorReleasedTickets,
-    handlePurchaseSuccess,
     handlePurchaseFailure,
     handleTicketRefunded,
     handleSystemStatus,

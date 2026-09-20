@@ -1,9 +1,9 @@
 const Ticket = require("../models/ticket");
 const VendorModel = require("../models/vendor");
-const CustomerModel = require("../models/customer");
+
 const { Mutex } = require("async-mutex");
 const mongoose = require("mongoose");
-const { getIO, getConnectedVendorSocketId } = require("../utils/socket");
+const { getIO } = require("../utils/socket");
 const socketEvents = require("../utils/socketEvents");
 const logger = require("../utils/logger");
 
@@ -52,6 +52,19 @@ class TicketPool {
     if (maxTicketCapacity) this.setMaxCapacity(maxTicketCapacity);
     if (ticketReleaseRate) this.#ticketReleaseRate = parseInt(ticketReleaseRate, 10);
     if (customerRetrievalRate) this.#customerRetrievalRate = parseInt(customerRetrievalRate, 10);
+
+    const availableTicketsCount = await this.getAvailableTickets();
+    logger.info(`Ticket pool initialized with capacity=${this.#maxCapacity}, totalTickets=${this.#totalTickets}, currently available=${availableTicketsCount}.`);
+
+    const io = safelyGetIO();
+    if (io) {
+      io.emit(socketEvents.SYSTEM_STATUS, {
+        status: "initialized",
+        message: "Ticket pool has been initialized successfully.",
+        eventName: process.env.EVENT_NAME || "WavePass: Your Boat Ride Ticketing System",
+        eventDate: process.env.EVENT_DATE || "2024-12-20",
+      });
+    }
   }
 
   getTotalTickets() {
@@ -294,13 +307,8 @@ class TicketPool {
 
     const notPurchased = count - purchasedTickets.length;
 
-    // Atomically associate purchased ticket IDs with customer document
+    // Emit real-time events after successful purchases
     if (purchasedTickets.length > 0) {
-      const ticketIds = purchasedTickets.map((t) => t._id);
-      await CustomerModel.findByIdAndUpdate(customerId, {
-        $push: { ticketsPurchased: { $each: ticketIds } },
-      });
-
       const totalAvailable = await this.getTotalReleasedTickets();
       const io = safelyGetIO();
       if (io) {
@@ -366,11 +374,6 @@ class TicketPool {
     if (!updatedTicket) {
       return null;
     }
-
-    // Atomically pull ticket from customer's list
-    await CustomerModel.findByIdAndUpdate(customerId, {
-      $pull: { ticketsPurchased: ticketId },
-    });
 
     const totalAvailable = await this.getTotalReleasedTickets();
     const io = safelyGetIO();
@@ -526,28 +529,6 @@ class TicketPool {
       return deleteResult.deletedCount;
     } finally {
       await session.endSession();
-    }
-  }
-
-  /**
-   * Initializes the ticket pool with configuration parameters.
-   */
-  async initialize({ totalTickets, ticketReleaseRate, customerRetrievalRate, maxTicketCapacity }) {
-    this.#maxCapacity = maxTicketCapacity;
-    this.#ticketReleaseRate = ticketReleaseRate;
-    this.#customerRetrievalRate = customerRetrievalRate;
-
-    const availableTicketsCount = await this.getAvailableTickets();
-    logger.info(`Ticket pool initialized with capacity=${this.#maxCapacity}, currently available=${availableTicketsCount}.`);
-
-    const io = safelyGetIO();
-    if (io) {
-      io.emit(socketEvents.SYSTEM_STATUS, {
-        status: "initialized",
-        message: "Ticket pool has been initialized successfully.",
-        eventName: process.env.EVENT_NAME || "WavePass: Your Boat Ride Ticketing System",
-        eventDate: process.env.EVENT_DATE || "2024-12-20",
-      });
     }
   }
 

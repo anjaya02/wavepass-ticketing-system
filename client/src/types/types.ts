@@ -1,7 +1,3 @@
-export interface InitialData {
-  availableTickets: number;
-}
-
 export interface TicketUpdate {
   ticketId: string;
   status: "sold" | "available";
@@ -32,11 +28,6 @@ export interface SoldTicketsResponse {
 export interface VendorReleasedTicketsResponse {
   message?: string;
   releasedTickets: number;
-}
-
-export interface PurchaseSuccess {
-  ticketIds: string[];
-  availableTickets: number;
 }
 
 export interface PurchaseFailure {

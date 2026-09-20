@@ -26,12 +26,6 @@ const customerSchema = new mongoose.Schema(
       type: Number,
       default: 15000,
     },
-    ticketsPurchased: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Ticket",
-      },
-    ],
     password: {
       type: String,
       required: [true, "Password is required."],

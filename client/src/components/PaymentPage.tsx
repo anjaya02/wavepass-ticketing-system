@@ -4,7 +4,6 @@ import Modal from "./Modal";
 import api from "../services/api";
 import axios from "axios";
 import { AuthContext } from "../context/AuthContext";
-import { useSocket } from "../context/SocketContext";
 
 // Define the Ticket interface
 interface Ticket {
@@ -18,7 +17,6 @@ interface Ticket {
 const PaymentPage: React.FC = () => {
   const navigate = useNavigate();
   const { authToken, customerId } = useContext(AuthContext);
-  const { socket } = useSocket();
 
   // States for customer details, tickets, card details, and modal visibility
   const [customerName, setCustomerName] = useState<string>("");
@@ -124,21 +122,6 @@ const PaymentPage: React.FC = () => {
     }
   };
 
-  // Socket listener for real-time ticket notifications
-  useEffect(() => {
-    if (!socket || !customerId) {
-      return;
-    }
-
-    const handleTicketRetrieved = (data: { ticket: Ticket }) => {
-      setPurchasedTickets((prev) => [...prev, data.ticket]);
-    };
-
-    socket.on("ticketRetrieved", handleTicketRetrieved);
-    return () => {
-      socket.off("ticketRetrieved", handleTicketRetrieved);
-    };
-  }, [socket, customerId]);
 
   // Handle modal actions
   const handleGoHome = () => {

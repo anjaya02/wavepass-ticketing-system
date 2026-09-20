@@ -43,7 +43,12 @@ afterEach(async () => {
 afterAll(async () => {
   if (mongoose.connection.readyState !== 0) {
     try {
-      await mongoose.connection.dropDatabase();
+      const dbName = mongoose.connection.db.databaseName;
+      if (dbName.includes("test")) {
+        await mongoose.connection.dropDatabase();
+      } else {
+        console.warn(`Safety guard: Refused to drop non-test database "${dbName}".`);
+      }
       await mongoose.connection.close();
     } catch (err) {
       // Ignore disconnect errors in test teardown
