@@ -70,8 +70,6 @@ const VendorLogin: React.FC = () => {
         password,
       });
 
-      console.log("API Response:", response.data);
-
       if (response.data.token) {
         // Store the token in localStorage
         localStorage.setItem("token", response.data.token);

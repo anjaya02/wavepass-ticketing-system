@@ -1,47 +1,65 @@
+const jwt = require("jsonwebtoken");
+const logger = require("./logger");
+
 let io;
-const connectedClients = new Map(); // Map to store customerId and socketId
-const connectedVendors = new Map(); // Map to store vendorId and socketId
 
 const initSocket = (server) => {
   const { Server } = require("socket.io");
+  
+  const allowedOrigins = [
+    process.env.CLIENT_URL,
+    process.env.FRONTEND_URL,
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:80",
+    "http://localhost",
+  ].filter(Boolean);
+
   io = new Server(server, {
     cors: {
-      origin: process.env.FRONTEND_URL || "http://localhost:5173",
+      origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) {
+          return callback(null, true);
+        }
+        return callback(new Error("CORS policy violation: Unauthorized origin for WebSocket."));
+      },
       methods: ["GET", "POST"],
       credentials: true,
     },
   });
 
+  // Authenticate socket handshake using JWT
+  io.use((socket, next) => {
+    const token = socket.handshake.auth && socket.handshake.auth.token;
+    if (token) {
+      try {
+        const secret = process.env.JWT_SECRET;
+        const decoded = jwt.verify(token, secret);
+        socket.user = decoded; // { id, role }
+        logger.debug(`Socket authenticated for user: ${decoded.id} (${decoded.role})`);
+      } catch (err) {
+        return next(new Error("Authentication error: Invalid or expired token."));
+      }
+    }
+    // Allow unauthenticated connection for public guest broadcasts
+    next();
+  });
+
   io.on("connection", (socket) => {
-    console.log("A client connected:", socket.id);
+    logger.debug(`Socket connected: ${socket.id}`);
 
-    // Listen for 'register' event to associate customerId with socket.id
-    socket.on("register", (customerId) => {
-      console.log(`Registering customerId ${customerId} with socketId ${socket.id}`);
-      connectedClients.set(customerId, socket.id);
-    });
-
-    // Listen for 'registerVendor' event to associate vendorId with socket.id
-    socket.on("registerVendor", (vendorId) => {
-      console.log(`Registering vendorId ${vendorId} with socketId ${socket.id}`);
-      connectedVendors.set(vendorId, socket.id);
-    });
+    // Join private room derived strictly from verified JWT
+    if (socket.user && socket.user.id) {
+      socket.join(`user:${socket.user.id}`);
+      if (socket.user.role === "vendor") {
+        socket.join("role:vendor");
+      } else if (socket.user.role === "customer") {
+        socket.join("role:customer");
+      }
+    }
 
     socket.on("disconnect", () => {
-      console.log("Client disconnected:", socket.id);
-      // Remove the socket from connected clients
-      connectedClients.forEach((value, key) => {
-        if (value === socket.id) {
-          connectedClients.delete(key);
-        }
-      });
-
-      // Remove the socket from connected vendors
-      connectedVendors.forEach((value, key) => {
-        if (value === socket.id) {
-          connectedVendors.delete(key);
-        }
-      });
+      logger.debug(`Socket disconnected: ${socket.id}`);
     });
   });
 };
@@ -53,17 +71,7 @@ const getIO = () => {
   return io;
 };
 
-const getConnectedClientSocketId = (customerId) => {
-  return connectedClients.get(customerId);
-};
-
-const getConnectedVendorSocketId = (vendorId) => {
-  return connectedVendors.get(vendorId);
-};
-
 module.exports = {
   init: initSocket,
   getIO,
-  getConnectedClientSocketId, 
-  getConnectedVendorSocketId, 
 };

@@ -1,6 +1,6 @@
 import React, { useState, FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import axios from "axios";
+import api from "../services/api";
 
 interface RegisterResponse {
   success: boolean;
@@ -81,9 +81,7 @@ const CustomerRegister: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const apiUrl = "http://localhost:5000/api/customers/register";
-
-      const response = await axios.post<RegisterResponse>(apiUrl, {
+      const response = await api.post<RegisterResponse>("/customers/register", {
         name,
         email,
         password,

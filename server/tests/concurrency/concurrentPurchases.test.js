@@ -1,12 +1,10 @@
 const request = require("supertest");
-const mongoose = require("mongoose");
 const { app } = require("../../server");
 const ticketPool = require("../../classes/TicketPool");
 const Ticket = require("../../models/ticket");
+const { describeIfDb } = require("../dbCheck");
 
-const isDbConnected = () => mongoose.connection.readyState === 1;
-
-describe("High-Concurrency Stress Test: Simultaneous Ticket Purchases", () => {
+describeIfDb("High-Concurrency Stress Test: Simultaneous Ticket Purchases", () => {
   const TOTAL_AVAILABLE_TICKETS = 10;
   const CONCURRENT_BUYERS = 50;
 
@@ -14,7 +12,12 @@ describe("High-Concurrency Stress Test: Simultaneous Ticket Purchases", () => {
   const customers = [];
 
   beforeEach(async () => {
-    if (!isDbConnected()) return;
+    jest.setTimeout(35000);
+    const Customer = require("../../models/customer");
+    const Vendor = require("../../models/vendor");
+    await Ticket.deleteMany({});
+    await Vendor.deleteMany({});
+    await Customer.deleteMany({});
 
     await ticketPool.initialize({
       totalTickets: 200,
@@ -38,30 +41,31 @@ describe("High-Concurrency Stress Test: Simultaneous Ticket Purchases", () => {
       .send({ ticketCount: TOTAL_AVAILABLE_TICKETS });
 
     customers.length = 0;
+    const regPromises = [];
     for (let i = 0; i < CONCURRENT_BUYERS; i++) {
       const email = `concurrent_buyer_${i}@example.com`;
       const mobile = `077000${String(i).padStart(4, "0")}`;
-
-      const regRes = await request(app)
-        .post("/api/customers/register")
-        .send({
-          name: `Buyer ${i}`,
-          email,
-          mobileNumber: mobile,
-          password: "Password123!",
-        });
-
-      customers.push({
-        id: regRes.body.customer.id,
-        token: regRes.body.token,
-        email,
-      });
+      regPromises.push(
+        request(app)
+          .post("/api/customers/register")
+          .send({
+            name: `Buyer ${i}`,
+            email,
+            mobileNumber: mobile,
+            password: "Password123!",
+          })
+          .then((regRes) => ({
+            id: regRes.body.customer.id,
+            token: regRes.body.token,
+            email,
+          }))
+      );
     }
+    const registered = await Promise.all(regPromises);
+    customers.push(...registered);
   });
 
   test(`Should handle ${CONCURRENT_BUYERS} simultaneous purchase attempts for ${TOTAL_AVAILABLE_TICKETS} tickets with zero overselling`, async () => {
-    if (!isDbConnected()) return;
-
     const initialAvailable = await ticketPool.getAvailableTickets();
     expect(initialAvailable).toBe(TOTAL_AVAILABLE_TICKETS);
 

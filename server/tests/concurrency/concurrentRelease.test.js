@@ -1,12 +1,10 @@
 const request = require("supertest");
-const mongoose = require("mongoose");
 const { app } = require("../../server");
 const ticketPool = require("../../classes/TicketPool");
 const Ticket = require("../../models/ticket");
+const { describeIfDb } = require("../dbCheck");
 
-const isDbConnected = () => mongoose.connection.readyState === 1;
-
-describe("High-Concurrency Stress Test: Simultaneous Vendor Releases Near Capacity", () => {
+describeIfDb("High-Concurrency Stress Test: Simultaneous Vendor Releases Near Capacity", () => {
   const MAX_CAPACITY = 25;
   const VENDOR_COUNT = 5;
   const TICKETS_PER_VENDOR_RELEASE = 10;
@@ -14,8 +12,6 @@ describe("High-Concurrency Stress Test: Simultaneous Vendor Releases Near Capaci
   const vendors = [];
 
   beforeEach(async () => {
-    if (!isDbConnected()) return;
-
     await ticketPool.initialize({
       totalTickets: 100,
       ticketReleaseRate: 5000,
@@ -43,8 +39,6 @@ describe("High-Concurrency Stress Test: Simultaneous Vendor Releases Near Capaci
   });
 
   test("Simultaneous releases across multiple vendors must never exceed maximum ticket pool capacity", async () => {
-    if (!isDbConnected()) return;
-
     const releasePromises = vendors.map((v) =>
       request(app)
         .post("/api/vendor/add-tickets")

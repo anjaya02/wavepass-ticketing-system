@@ -1,17 +1,10 @@
 import React, { useState, FormEvent } from "react";
+import axios from "axios";
 import Modal from "./Modal";
+import api from "../services/api";
 
 interface ConfigurationFormProps {
   onClose: () => void;
-}
-
-interface ServerError {
-  msg: string;
-}
-
-interface ConfigResponse {
-  message?: string;
-  errors?: ServerError[];
 }
 
 const ConfigurationForm: React.FC<ConfigurationFormProps> = ({ onClose }) => {
@@ -127,32 +120,19 @@ const ConfigurationForm: React.FC<ConfigurationFormProps> = ({ onClose }) => {
     if (Object.keys(validationErrors).length === 0) {
       setIsLoading(true);
       try {
-        const response = await fetch("http://localhost:5000/api/config/set", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            totalTickets,
-            ticketReleaseRate,
-            customerRetrievalRate,
-            maxTicketCapacity,
-          }),
+        await api.post("/config/set", {
+          totalTickets,
+          ticketReleaseRate,
+          customerRetrievalRate,
+          maxTicketCapacity,
         });
-
-        const data: ConfigResponse = await response.json();
-
-        if (!response.ok) {
-          const errorMessages = data.errors
-            ? data.errors.map((err: ServerError) => err.msg).join(", ")
-            : data.message || "Failed to set configurations.";
-          throw new Error(errorMessages);
-        }
 
         setModalMessage("Configurations have been set successfully!");
         setIsModalOpen(true);
       } catch (error: unknown) {
-        if (error instanceof Error) {
+        if (axios.isAxiosError(error) && error.response?.data?.error?.message) {
+          setModalMessage(error.response.data.error.message);
+        } else if (error instanceof Error) {
           setModalMessage(error.message);
         } else {
           setModalMessage("An unexpected error occurred.");

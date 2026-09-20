@@ -5,7 +5,7 @@ import api from "../services/api";
 import axios from "axios";
 import { RawTicket } from "../interfaces/RawTicket";
 import socketEvents from "../utils/socketEvents";
-import { getSocket, initiateSocket } from "../services/socket";
+import { useSocket } from "../context/SocketContext";
 import { AuthContext } from "../context/AuthContext";
 import { TicketRefunded, TicketUpdate } from "../types/types"; 
 import { validateStatus } from "../utils/validateStatus"; 
@@ -29,17 +29,12 @@ const CustomerPurchasedTickets: React.FC = () => {
   const ticketsPerPage = 10;
 
   // Context and Authentication
-  const { authToken, customerId } = useContext(AuthContext);
-  const isAuthenticated = Boolean(authToken);
-  const token = authToken;
+  const { customerId, authToken } = useContext(AuthContext);
+  const { socket } = useSocket();
 
-  // Initialize Socket.io
+  // Socket.io event listeners
   useEffect(() => {
-    if (isAuthenticated && token) {
-      initiateSocket(token);
-    }
-
-    const socket = getSocket();
+    if (!socket) return;
 
     // Listen to TICKET_REFUNDED event
     socket?.on(socketEvents.TICKET_REFUNDED, (data: TicketRefunded) => {
@@ -67,11 +62,10 @@ const CustomerPurchasedTickets: React.FC = () => {
     });
 
     return () => {
-      // Cleanup on component unmount
       socket?.off(socketEvents.TICKET_REFUNDED);
       socket?.off(socketEvents.TICKET_UPDATE);
-     };
-  }, [isAuthenticated, token]);
+    };
+  }, [socket]);
 
   // Fetch Tickets
   useEffect(() => {
@@ -82,11 +76,7 @@ const CustomerPurchasedTickets: React.FC = () => {
 
         if (!customerId) throw new Error("Customer ID not found.");
 
-        const response = await api.get(`/customers/${customerId}/tickets`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
+        const response = await api.get(`/customers/${customerId}/tickets`);
 
         // Log the raw tickets data
         console.log("Raw tickets data:", response.data.ticketsPurchased);
@@ -161,10 +151,10 @@ const CustomerPurchasedTickets: React.FC = () => {
       }
     };
 
-    if (isAuthenticated && token && customerId) {
+    if (authToken && customerId) {
       fetchTickets();
     }
-  }, [isAuthenticated, token, customerId]);
+  }, [authToken, customerId]);
 
   // Handle Refund Request
   const handleRefund = async (ticketId: string) => {

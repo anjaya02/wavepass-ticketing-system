@@ -2,8 +2,7 @@ const mongoose = require("mongoose");
 const ticketPool = require("../../classes/TicketPool");
 const Ticket = require("../../models/ticket");
 const Customer = require("../../models/customer");
-
-const isDbConnected = () => mongoose.connection.readyState === 1;
+const { testIfDb } = require("../dbCheck");
 
 describe("TicketPool Unit Tests", () => {
   let vendorId;
@@ -14,6 +13,10 @@ describe("TicketPool Unit Tests", () => {
     customerId = new mongoose.Types.ObjectId();
 
     ticketPool.setMaxCapacity(50);
+    ticketPool.setTotalTickets(500);
+    if (mongoose.connection.readyState === 1) {
+      await Ticket.deleteMany({});
+    }
   });
 
   test("should initialize and maintain maximum capacity property", () => {
@@ -36,11 +39,7 @@ describe("TicketPool Unit Tests", () => {
     expect(resultNaN.added).toBe(0);
   });
 
-  test("should add tickets within maximum capacity limits when database is connected", async () => {
-    if (!isDbConnected()) {
-      return;
-    }
-
+  testIfDb("should add tickets within maximum capacity limits", async () => {
     const result = await ticketPool.addTickets(30, vendorId);
     expect(result.added).toBe(30);
     expect(result.notAdded).toBe(0);
@@ -52,11 +51,7 @@ describe("TicketPool Unit Tests", () => {
     expect(space).toBe(20);
   });
 
-  test("should reject excess tickets when release exceeds max capacity when database is connected", async () => {
-    if (!isDbConnected()) {
-      return;
-    }
-
+  testIfDb("should reject excess tickets when release exceeds max capacity", async () => {
     await ticketPool.addTickets(40, vendorId);
     const result = await ticketPool.addTickets(20, vendorId);
     expect(result.added).toBe(10);
@@ -66,11 +61,7 @@ describe("TicketPool Unit Tests", () => {
     expect(totalAvailable).toBe(50);
   });
 
-  test("should atomically remove one ticket and assign to customer when database is connected", async () => {
-    if (!isDbConnected()) {
-      return;
-    }
-
+  testIfDb("should atomically remove one ticket and assign to customer", async () => {
     await ticketPool.addTickets(5, vendorId);
     const ticket = await ticketPool.removeOneTicket(customerId);
     expect(ticket).not.toBeNull();
@@ -78,11 +69,7 @@ describe("TicketPool Unit Tests", () => {
     expect(ticket.owner.toString()).toBe(customerId.toString());
   });
 
-  test("should return null when removing ticket from empty pool when database is connected", async () => {
-    if (!isDbConnected()) {
-      return;
-    }
-
+  testIfDb("should return null when removing ticket from empty pool", async () => {
     const ticket = await ticketPool.removeOneTicket(customerId);
     expect(ticket).toBeNull();
   });

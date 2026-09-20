@@ -35,16 +35,18 @@ const allowedOrigins = [
   env.CLIENT_URL,
   "http://localhost:5173",
   "http://127.0.0.1:5173",
-];
+  "http://localhost:80",
+  "http://localhost",
+].filter(Boolean);
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, Supertest)
+      // Allow requests with no origin (like curl, Postman, Supertest)
       if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
-      return callback(null, true); // Permissive in dev, can restrict in strict prod
+      return callback(new Error("CORS policy violation: Unauthorized origin."));
     },
     credentials: true,
   })

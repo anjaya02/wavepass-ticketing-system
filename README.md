@@ -1,6 +1,6 @@
 # WavePass
 
-A real-time event ticketing platform built with Node.js, Express, MongoDB, and React. Engineered to handle high-concurrency ticket releases and purchases, preventing race conditions through database-level atomic operations and asynchronous mutual exclusion.
+A real-time event ticketing platform built with Node.js, Express, MongoDB, and React. Engineered to handle high-concurrency ticket releases and purchases, preventing overselling and race conditions through database-level atomic operations, asynchronous mutual exclusion, and WebSocket real-time synchronization.
 
 ---
 
@@ -10,6 +10,8 @@ A real-time event ticketing platform built with Node.js, Express, MongoDB, and R
 - [Tech Stack](#tech-stack)
 - [Architecture](#architecture)
 - [Concurrency & Race-Condition Handling](#concurrency--race-condition-handling)
+- [Data Consistency & Source of Truth](#data-consistency--source-of-truth)
+- [Domain Concepts: totalTickets vs maxTicketCapacity](#domain-concepts-totaltickets-vs-maxticketcapacity)
 - [Security & Access Control](#security--access-control)
 - [Real-Time Events (Socket.IO)](#real-time-events-socketio)
 - [API Reference](#api-reference)
@@ -24,21 +26,26 @@ A real-time event ticketing platform built with Node.js, Express, MongoDB, and R
 
 ## Overview
 
-High-demand ticketing events often experience sudden spikes in concurrent traffic. Without proper synchronization, simultaneous requests can cause overselling beyond venue capacity, double-allocation of tickets to multiple users, or inconsistent application state.
+High-demand ticketing platforms experience abrupt spikes in concurrent traffic. Without rigorous synchronization, simultaneous requests cause:
+- **Overselling** beyond venue or release limits.
+- **Double-allocation** of the same ticket to multiple customers.
+- **Capacity boundary races** where concurrent releases and refunds push available stock beyond maximum pool limits.
+- **State desynchronization** between customer ownership records and ticket inventory.
 
-WavePass solves these concurrency challenges using a **Producer-Consumer** architecture:
-- **Vendors (Producers)** release batches of tickets into a central **TicketPool**.
-- **Customers (Consumers)** purchase tickets from the pool concurrently.
-- **Mutual Exclusion & Atomicity** ensure that tickets are never double-sold and that total inventory stays within configured limits.
-- **WebSockets** push instant inventory and sales updates to connected clients and vendor dashboards.
+WavePass models ticket distribution as a synchronized **Producer-Consumer** system:
+- **Vendors (Producers)** release ticket batches into a shared pool.
+- **Customers (Consumers)** purchase tickets concurrently via atomic conditional transitions.
+- **Mutual Exclusion (`async-mutex`)** serializes release capacity checks and refund state transitions against pool boundaries.
+- **Database-Level Atomicity (`findOneAndUpdate`)** guarantees zero double-sales without coarse-grained table locks.
+- **Socket.IO WebSockets** push live inventory and order events to connected clients and vendor dashboards.
 
 ---
 
 ## Tech Stack
 
-- **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, React Router, Chart.js, Socket.IO Client
+- **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, React Router, Chart.js, Socket.IO Client, Axios
 - **Backend**: Node.js, Express.js, Socket.IO, `async-mutex`, `express-validator`, Winston, Helmet, Rate Limiter
-- **Database**: MongoDB & Mongoose (with compound indexing and atomic conditional operators)
+- **Database**: MongoDB & Mongoose (with compound indexing on `{ status: 1, eventName: 1, eventDate: 1 }` and atomic conditional operators)
 - **Testing**: Jest, Supertest
 - **DevOps**: Docker, Docker Compose, Nginx
 
@@ -46,22 +53,27 @@ WavePass solves these concurrency challenges using a **Producer-Consumer** archi
 
 ## Architecture
 
-### System Flow
+### System Flow (Option A: Direct Client-to-Backend Architecture)
+
+In this deployment architecture:
+1. **Frontend**: Nginx serves the compiled React 18 SPA statically on container port 80 (mapped to host port **5173**).
+2. **Backend**: Express and Socket.IO listen on port **5000**.
+3. **Browser Direct Communication**: The browser loads the SPA from port 5173 and issues REST API calls (`/api/...`) and WebSocket connections directly to `http://localhost:5000` via configured environment variables (`VITE_API_BASE_URL` and `VITE_SOCKET_URL`).
 
 ```mermaid
 graph TB
-    subgraph Client ["Client Layer"]
+    subgraph Client ["Browser Client Layer"]
         UI["React 18 SPA (TypeScript + Tailwind)"]
-        SocketClient["Socket.IO Client"]
-        AxiosClient["Axios HTTP Client"]
+        SocketClient["Socket.IO Client (VITE_SOCKET_URL)"]
+        AxiosClient["Axios HTTP Client (VITE_API_BASE_URL)"]
     end
 
-    subgraph Gateway ["Reverse Proxy"]
-        Nginx["Nginx Reverse Proxy (:80)"]
+    subgraph StaticServer ["Frontend Static Host (:5173)"]
+        Nginx["Nginx SPA Static Server (:80 -> :5173)"]
     end
 
     subgraph Server ["Backend Application (:5000)"]
-        Express["Express.js API"]
+        Express["Express.js API (/api/*)"]
         AuthMid["Auth & RBAC Middleware"]
         Controllers["Controllers (Auth, Customer, Vendor, Config)"]
         SocketServer["Socket.IO WebSocket Server"]
@@ -69,7 +81,6 @@ graph TB
         subgraph Domain ["Domain & Concurrency Services"]
             Mutex["async-mutex (Capacity Lock)"]
             TPool["TicketPool Service"]
-            VendorWorker["Vendor Release Engine"]
         end
     end
 
@@ -77,64 +88,17 @@ graph TB
         Mongo[("MongoDB Database")]
     end
 
+    Nginx -.->|Serves Static Bundle| UI
     UI --> AxiosClient
     UI --> SocketClient
-    AxiosClient -->|REST Requests| Nginx
-    SocketClient -->|WebSocket| Nginx
-    Nginx -->|/api| Express
-    Nginx -->|/socket.io| SocketServer
+    AxiosClient -->|REST Requests :5000/api| Express
+    SocketClient -->|WebSocket Handshake :5000| SocketServer
     Express --> AuthMid --> Controllers
     Controllers --> TPool
-    Controllers --> VendorWorker
-    VendorWorker --> Mutex --> TPool
-    TPool --> Mongo
+    TPool --> Mutex
+    Mutex --> Mongo
     TPool -.->|Broadcast Event| SocketServer
     SocketServer -.->|Push Notifications| SocketClient
-```
-
-### Producer-Consumer Flow
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor V as Vendor (Producer)
-    participant TP as TicketPool
-    participant M as Mutex
-    participant DB as MongoDB
-    actor C as Customer (Consumer)
-    participant WS as Socket.IO
-
-    Note over V,TP: Ticket Release (Producer)
-    V->>TP: addTickets(batchSize)
-    TP->>M: acquire()
-    TP->>DB: Count current pending tickets
-    alt Over Capacity
-        TP->>M: release()
-        TP-->>V: Error: Capacity exceeded
-    else Space Available
-        TP->>DB: insertMany(newTickets)
-        TP->>M: release()
-        TP->>WS: emit("ticketsUpdated")
-        TP-->>V: Success (tickets added)
-    end
-
-    Note over C,DB: Ticket Purchase (Consumer)
-    C->>TP: purchaseTicket(customerId, quantity)
-    TP->>DB: Query available candidate tickets
-    loop For each candidate ticket
-        TP->>DB: findOneAndUpdate({ _id, status: 'pending' }, { status: 'sold', customerId })
-        alt Updated Successfully
-            DB-->>TP: Return sold ticket
-        else Claimed by Concurrent Request
-            DB-->>TP: Return null (skip)
-        end
-    end
-    alt Fulfilled
-        TP->>WS: emit("ticketPurchased")
-        TP-->>C: 200 OK + Purchased Tickets
-    else Out of Stock
-        TP-->>C: 400 Out of Stock
-    end
 ```
 
 ---
@@ -143,84 +107,126 @@ sequenceDiagram
 
 ### Asynchronous Concurrency in Node.js
 
-Although Node.js runs application JavaScript on a single-threaded event loop, race conditions can still happen whenever execution crosses an asynchronous boundary (`await`, network requests, or database queries). 
+Node.js executes JavaScript on a single-threaded event loop, but concurrency races occur whenever an operation yields execution across asynchronous boundaries (`await`, network requests, or database queries).
 
-In a naive read-modify-write pattern:
+A naive read-modify-write pattern causes overselling:
 ```javascript
-// ❌ Unsafe: race condition under concurrency
-const ticket = await Ticket.findOne({ status: 'pending' });
-// Execution yields here during DB I/O. Another request reads the same ticket!
+// ❌ Unsafe: yields execution during DB query
+const ticket = await Ticket.findOne({ status: 'available' });
+// Context switches here. A concurrent request reads the exact same ticket!
 ticket.status = 'sold';
-ticket.customerId = customerId;
+ticket.owner = customerId;
 await ticket.save();
 ```
-If two requests query the same ticket concurrently, both see it as `pending`, and both assign it to different users.
 
-### Two-Tier Concurrency Model
+WavePass eliminates concurrency bugs through a two-tier synchronization strategy:
 
-WavePass uses two complementary mechanisms to prevent race conditions:
-
-#### 1. Database-Level Atomic Conditional Updates (`findOneAndUpdate`)
-For ticket purchases and refunds, operations rely on atomic conditional filters directly in MongoDB:
+### 1. Database-Level Atomic Conditional Updates (`findOneAndUpdate`)
+Purchases do not lock the entire table. Instead, purchases target available tickets using atomic MongoDB conditional filters:
 ```javascript
-const claimedTicket = await Ticket.findOneAndUpdate(
+const ticket = await Ticket.findOneAndUpdate(
   {
     _id: candidateTicket._id,
-    status: 'pending', // Predicate: only update if still pending
+    status: 'available', // Atomic predicate: matches ONLY if still available
   },
   {
     $set: {
       status: 'sold',
-      customerId: new mongoose.Types.ObjectId(customerId),
-      purchaseTime: new Date(),
+      owner: customerId,
     },
   },
   { new: true }
 );
 ```
-MongoDB guarantees document-level atomicity. If multiple concurrent requests target the same ticket, exactly one succeeds in matching `status: 'pending'` and transitioning it to `'sold'`. All other requests fail the filter, receive `null`, and move to the next candidate without race conditions or locks.
+MongoDB guarantees document-level atomicity. If 50 concurrent buyers attempt to purchase the same ticket, exactly one succeeds in transitioning `status: 'available' -> 'sold'`. The other 49 operations receive `null`, safely attempting the next candidate or terminating when stock is exhausted.
 
-#### 2. In-Memory Mutual Exclusion (`async-mutex`)
-For batch ticket releases, calculating remaining capacity and writing multiple records spans several asynchronous steps. The critical section is wrapped in a mutex:
+### 2. Mutex-Synchronized Pool Capacity Boundaries (`async-mutex`)
+Vendor ticket releases and customer refunds both alter available ticket count relative to `maxTicketCapacity`:
+- **Vendor Release**: Calculates remaining capacity, verifies against `totalTickets` lifetime cap, and inserts tickets.
+- **Customer Refund**: Verifies pool has space (`availableCount < maxTicketCapacity`) and atomically reverts ticket from `'sold'` to `'available'`.
+
+Without synchronization, a release and refund occurring concurrently near capacity can interleave:
+1. Pool is at 9/10 capacity.
+2. Vendor release checks capacity (9 < 10, space = 1) and prepares to insert 1 ticket.
+3. Customer refund checks capacity (9 < 10, space = 1) and prepares to refund 1 ticket.
+4. Both complete: available tickets = 11 > 10 (`maxTicketCapacity` violated!).
+
+WavePass wraps both operations within the `TicketPool` private mutex:
 ```javascript
-const release = await this.mutex.acquire();
-try {
-  const currentCount = await Ticket.countDocuments({ status: 'pending' });
-  if (currentCount + tickets.length > this.maxCapacity) {
-    throw new AppError(`Cannot add ${tickets.length} tickets. Pool capacity would be exceeded.`, 400);
+// Both addTickets and refundTicket run within this.#mutex.runExclusive()
+await this.#mutex.runExclusive(async () => {
+  const availableSpace = await this.getAvailableSpace(session);
+  if (availableSpace <= 0) {
+    throw new AppError("Ticket pool is currently at maximum capacity.", 400);
   }
-  return await Ticket.insertMany(tickets);
-} finally {
-  release(); // Always released in finally block
-}
+  // Atomically transition sold ticket back to available
+  const refunded = await Ticket.findOneAndUpdate(
+    { _id: ticketId, owner: customerId, status: "sold" },
+    { $set: { status: "available", owner: null } },
+    { new: true }
+  );
+});
 ```
-This guarantees that concurrent vendor releases cannot interleave their capacity checks and exceed `maxTicketCapacity`.
+This guarantees the strict invariant:
+$$\text{availableTickets} \le \text{maxTicketCapacity}$$
+at all times under concurrent load.
 
-> **Scaling Note:** The in-memory mutex (`async-mutex`) serializes releases within a single Node.js process. In a multi-instance deployment behind a load balancer, cross-process mutual exclusion would use a distributed lock (such as Redis Redlock), while MongoDB's atomic document operations (`findOneAndUpdate`) remain safe across any number of server instances.
+---
+
+## Data Consistency & Source of Truth
+
+### Design Decision: `Ticket.owner` as Authoritative Truth
+
+In an earlier prototype, customer purchases recorded ownership in two places:
+1. `Ticket.owner` / `Ticket.status`
+2. An array field `Customer.ticketsPurchased` on the Customer document
+
+Maintaining dual writes across two separate collections without distributed multi-document transactions introduces desynchronization risk: if the ticket update succeeds but the customer document write fails, the database enters an inconsistent state.
+
+**Resolution**:
+- **Single Source of Truth**: The `Ticket` document (`status: "sold"`, `owner: customerId`) is the authoritative source of ownership.
+- **Derived Retrieval**: The endpoint `GET /api/customers/:customerId/tickets` directly queries:
+  ```javascript
+  const tickets = await Ticket.find({ owner: customerId, status: "sold" }).lean();
+  ```
+- **Atomicity**: Purchases and refunds require modifying only the `Ticket` document, keeping operations fully atomic at the database level with zero dual-write vulnerabilities.
+
+---
+
+## Domain Concepts: `totalTickets` vs `maxTicketCapacity`
+
+| Parameter | Domain Meaning | Enforcement |
+| :--- | :--- | :--- |
+| `totalTickets` | **Lifetime Event Ticket Supply**: The absolute maximum number of tickets that can ever be created/minted across all vendors for the event. | Checked under mutex in `TicketPool.addTickets()`: `Ticket.countDocuments({}) + batch <= totalTickets`. |
+| `maxTicketCapacity` | **Concurrent Pool Capacity**: The maximum number of *currently available* tickets that can sit in the pool buffer at any single moment. | Checked under mutex in `addTickets()` and `refundTicket()`: `availableCount <= maxTicketCapacity`. |
 
 ---
 
 ## Security & Access Control
 
-- **JWT Authentication**: Users receive signed JSON Web Tokens upon authentication.
-- **Role-Based Access Control (RBAC)**: Custom middleware ([`authorizeRole.js`](file:///c:/Users/HP/Desktop/wavepass-ticketing-system/server/middleware/authorizeRole.js)) isolates customer endpoints from vendor administrative operations.
-- **Ownership Verification**: Custom middleware ([`checkOwnership.js`](file:///c:/Users/HP/Desktop/wavepass-ticketing-system/server/middleware/checkOwnership.js)) ensures customers can only inspect or refund their own tickets, preventing Broken Object Level Authorization (BOLA/IDOR).
-- **Password Security**: Password hashes are generated with `bcryptjs` and automatically stripped from JSON outputs using Mongoose `toJSON` transforms.
-- **Rate Limiting**: Brute-force protection on `/api/auth/*` routes via `express-rate-limit`.
-- **HTTP Headers**: Enforces secure HTTP headers using `helmet`.
+- **JWT Authentication**: Secure JSON Web Tokens with HS256 signatures, verified via `authenticateToken` middleware and Socket.IO connection handshakes.
+- **Role-Based Access Control (RBAC)**: Enforced via [authorizeRole.js](server/middleware/authorizeRole.js) (`customer` vs `vendor`).
+- **Object-Level Ownership Authorization (BOLA/IDOR Protection)**: Enforced via [checkOwnership.js](server/middleware/checkOwnership.js) ensuring customers cannot inspect, purchase, or refund another customer's tickets by manipulating URL parameters.
+- **Password Hashing**: Salted bcrypt (10 rounds) with password fields stripped from `toJSON()` serialization on Mongoose models.
+- **Brute-Force Rate Limiting**: `express-rate-limit` protects `/api/customers/login`, `/api/customers/register`, `/api/vendor/login`, and `/api/vendor/register`.
+- **CORS Configuration**: Restricts browser requests to permitted frontend origins while accepting legitimate server-to-server and automated test requests.
 
 ---
 
 ## Real-Time Events (Socket.IO)
 
+Socket.IO authentication validates JWT tokens during the connection handshake (`io.use()`). Verified sockets are automatically placed into role-based and user-specific rooms (`role:customer`, `role:vendor`, `user:<id>`).
+
 | Event Name | Direction | Payload | Description |
 | :--- | :--- | :--- | :--- |
-| `register` | Client -> Server | `customerId` | Joins a private customer socket room. |
-| `registerVendor` | Client -> Server | `vendorId` | Joins a private vendor channel. |
-| `ticketsUpdated` | Server -> Broadcast | `{ total, sold, pending }` | Emitted when pool counts change. |
-| `ticketPurchased` | Server -> Broadcast | `{ ticketId, customerId, eventName }` | Emitted when an order completes. |
-| `ticketRefunded` | Server -> Broadcast | `{ ticketId, customerId }` | Emitted when a ticket is returned. |
-| `ticketsAdded` | Server -> Vendor | `{ count, addedTickets }` | Confirms batch release completion. |
+| `initialData` | Server -> Connected Client | `{ availableTickets, soldTickets, totalReleasedTickets, maxCapacity }` | Emitted upon successful authenticated connection. |
+| `ticketUpdate` | Server -> Broadcast | `{ availableTickets, totalReleasedTickets }` | Emitted when available inventory changes. |
+| `vendorReleasedTickets`| Server -> Broadcast | `{ releasedTickets, vendorId }` | Emitted when a vendor adds tickets to the pool. |
+| `ticketSold` | Server -> Broadcast | `{ ticketId, customerId, price }` | Emitted when a ticket is purchased. |
+| `purchaseSuccess` | Server -> Broadcast | `{ customerId, ticketsPurchased }` | Emitted when a purchase batch succeeds. |
+| `purchaseFailure` | Server -> Broadcast | `{ customerId, message }` | Emitted when a purchase fails (e.g. out of stock). |
+| `ticketRefunded` | Server -> Broadcast | `{ ticketId, customerId }` | Emitted when a ticket is refunded. |
+| `systemStatus` | Server -> Broadcast | `{ status, message }` | Emitted for operational status notices. |
 
 ---
 
@@ -232,6 +238,7 @@ All responses follow a standard envelope:
 ```json
 {
   "success": true,
+  "message": "Operation completed successfully.",
   "data": { ... }
 }
 ```
@@ -241,45 +248,59 @@ All responses follow a standard envelope:
 {
   "success": false,
   "error": {
-    "code": "OUT_OF_STOCK",
-    "message": "Only 2 tickets were available for purchase."
-  }
+    "code": "TICKETS_UNAVAILABLE",
+    "message": "No tickets available for purchase in the pool."
+  },
+  "message": "No tickets available for purchase in the pool."
 }
 ```
 
-### Endpoints
+### Complete Endpoints Table
 
 | Method | Endpoint | Auth | Role | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `POST` | `/api/auth/register-customer` | Public | None | Register a customer account |
-| `POST` | `/api/auth/login-customer` | Public | None | Login customer, returns JWT |
-| `POST` | `/api/auth/register-vendor` | Public | None | Register a vendor account |
-| `POST` | `/api/auth/login-vendor` | Public | None | Login vendor, returns JWT |
-| `GET` | `/api/auth/me` | Bearer | Any | Fetch current user profile |
-| `POST` | `/api/customer/purchaseTicket` | Bearer | `customer` | Atomically purchase tickets |
-| `GET` | `/api/customer/tickets` | Optional | Any | Browse available (`pending`) tickets |
-| `GET` | `/api/customer/tickets/:customerId` | Bearer | `customer` (Owner) | Get tickets for authenticated customer |
-| `POST` | `/api/customer/refundTicket` | Bearer | `customer` (Owner) | Refund a purchased ticket |
-| `POST` | `/api/vendor/releaseTickets` | Bearer | `vendor` | Release ticket batch to the pool |
-| `GET` | `/api/vendor/tickets` | Bearer | `vendor` | View all released tickets |
-| `GET` | `/api/vendor/tickets/:vendorId` | Bearer | `vendor` (Owner) | View tickets released by specific vendor |
-| `GET` | `/api/vendor/analytics` | Bearer | `vendor` | View sales and capacity metrics |
-| `GET` | `/api/config` | Bearer | Any | Retrieve system configuration |
-| `POST` | `/api/config` | Bearer | `vendor` | Update system configuration |
-| `GET` | `/api/health` | Public | None | Liveness health check |
+| `GET` | `/health` | Public | None | API health check and timestamp |
+| `POST` | `/api/customers/register` | Public | None | Register a new customer account |
+| `POST` | `/api/customers/login` | Public | None | Login customer and receive JWT |
+| `GET` | `/api/customers/available-tickets` | Bearer | Any | Get current available ticket count |
+| `GET` | `/api/customers/:customerId` | Bearer | `customer` (Owner) / `vendor` | Retrieve customer details |
+| `POST` | `/api/customers/:customerId/purchase` | Bearer | `customer` (Owner) | Atomically purchase tickets |
+| `GET` | `/api/customers/:customerId/tickets` | Bearer | `customer` (Owner) / `vendor` | View customer's purchased tickets |
+| `POST` | `/api/customers/:customerId/refund` | Bearer | `customer` (Owner) | Refund a purchased ticket |
+| `POST` | `/api/vendor/register` | Public | None | Register a new vendor account |
+| `POST` | `/api/vendor/login` | Public | None | Login vendor and receive JWT |
+| `POST` | `/api/vendor/add-tickets` | Bearer | `vendor` | Batch release tickets to pool |
+| `POST` | `/api/vendor/start-release` | Bearer | `vendor` | Start automated background release |
+| `POST` | `/api/vendor/stop-release` | Bearer | `vendor` | Stop automated background release |
+| `DELETE`| `/api/vendor/delete-available-tickets`| Bearer | `vendor` | Delete all unsold tickets in pool |
+| `GET` | `/api/vendor/my-tickets` | Bearer | `vendor` | Get tickets released by current vendor |
+| `GET` | `/api/vendor/released-tickets` | Bearer | `vendor` | Get available tickets count for vendor |
+| `GET` | `/api/vendor/total-released-tickets` | Bearer | `vendor` | Get total available tickets across all vendors |
+| `GET` | `/api/vendor/sold-tickets` | Bearer | `vendor` | Get total sold tickets count |
+| `GET` | `/api/vendor/ticket-pool` | Bearer | `vendor` | Get pool capacity metrics |
+| `GET` | `/api/config/` | Public | None | Get active system configuration |
+| `GET` | `/api/config/customer-retrieval-rate`| Public | None | Get retrieval rate configuration |
+| `POST` | `/api/config/set` | Bearer | `vendor` | Update system configuration limits |
+| `POST` | `/api/config/reset` | Bearer | `vendor` | Reset system configuration to defaults |
 
 ---
 
 ## Testing
 
-The test suite includes **10 test suites (38 automated tests)** covering unit logic, REST endpoints, and concurrency stress scenarios:
+The testing suite contains **10 test suites (39 automated tests)** spanning unit testing, REST API integration, and high-concurrency stress verification:
 
-- **Unit**: Singleton configuration, input boundaries, in-memory pool operations, password hashing, and token verification.
-- **Integration**: Customer and vendor authentication, ticket browsing, purchase validation, and refund flows.
-- **Concurrency**:
-  - `concurrentPurchases.test.js`: Fires **50 concurrent buyer requests** against 10 available tickets using `Promise.all()`. Verifies zero double-allocations, exactly 10 tickets sold, and 40 out-of-stock rejections.
-  - `concurrentRelease.test.js`: Multiple vendors releasing tickets simultaneously at maximum capacity boundary.
-  - `concurrentPurchaseRefund.test.js`: Interleaved concurrent purchases and refunds verifying consistent state.
+### Database-Aware Test Execution (`dbCheck.js`)
+Tests requiring an active MongoDB connection utilize `describeIfDb` and `testIfDb`. If MongoDB is unavailable in the execution environment:
+- Database-dependent tests are **explicitly reported as SKIPPED**;
+- They **never pass silently** with early returns;
+- Unit and static tests continue to execute and pass.
+
+### Concurrency Stress Test Coverage
+1. `concurrentPurchases.test.js`: Fires **50 concurrent buyer requests** at the exact same millisecond against 10 available tickets. Verifies zero double-allocations, exactly 10 tickets sold, 40 rejected with 409, and consistent database state.
+2. `concurrentRelease.test.js`: Multiple vendors releasing tickets concurrently at the pool capacity boundary.
+3. `concurrentPurchaseRefund.test.js`:
+   - Interleaved concurrent purchases and refunds verifying exact stock conservation.
+   - Concurrency race test simulating simultaneous vendor release and customer refund at the capacity boundary (`available <= maxTicketCapacity`).
 
 ### Running Tests
 
@@ -300,7 +321,7 @@ npm run test:coverage
 ### Prerequisites
 - Node.js >= 18 LTS
 - npm >= 9
-- MongoDB instance (or Docker)
+- MongoDB instance (local or remote)
 
 ### Local Setup
 
@@ -324,15 +345,15 @@ npm run test:coverage
    npm run dev
    ```
 
-The frontend will run at `http://localhost:5173` and the backend at `http://localhost:5000`.
+The frontend runs at `http://localhost:5173` and the backend at `http://localhost:5000`.
 
-> **Note on Payments:** The checkout interface in [`PaymentPage.tsx`](file:///c:/Users/HP/Desktop/wavepass-ticketing-system/client/src/components/PaymentPage.tsx) is a simulated flow for demonstration. No actual credit card transactions take place, and no payment credentials are saved.
+> **Note on Payments:** The checkout interface in [PaymentPage.tsx](client/src/components/PaymentPage.tsx) is a simulated flow for demonstration. No actual credit card transactions take place, and no payment credentials are saved.
 
 ---
 
 ## Docker Deployment
 
-To spin up the entire full-stack environment (frontend, backend, and MongoDB) with a single command:
+To build and run the full stack using Docker Compose:
 
 ```bash
 # Build and run all services in detached mode
@@ -348,9 +369,9 @@ docker compose logs -f
 docker compose down
 ```
 
-### Access Points
-- **Frontend App**: `http://localhost` (Port 80 via Nginx reverse proxy)
-- **Backend API**: `http://localhost:5000`
+### Port Mappings
+- **Frontend App**: `http://localhost:5173` (Container port 80 mapped to host 5173)
+- **Backend API**: `http://localhost:5000` (Container port 5000 mapped to host 5000)
 - **MongoDB**: `localhost:27017`
 
 ---
@@ -364,23 +385,23 @@ wavepass-ticketing-system/
 │
 ├── client/                       # React 18 Frontend
 │   ├── Dockerfile                # Multi-stage production build
-│   ├── nginx.conf                # Nginx reverse proxy and SPA routing
+│   ├── nginx.conf                # Nginx SPA static file server
 │   ├── src/
 │   │   ├── components/           # UI views (Dashboards, Payment, Navbar)
-│   │   ├── context/              # Auth and WebSocket state providers
-│   │   ├── services/api.ts       # Axios client with interceptors
+│   │   ├── context/              # AuthContext & SocketContext providers
+│   │   ├── services/api.ts       # Centralized Axios client with JWT interceptors
 │   │   └── types/types.ts        # TypeScript interface definitions
 │   └── vite.config.ts
 │
 └── server/                       # Node.js Express Backend
     ├── Dockerfile                # Node 18 Alpine production image
-    ├── server.js                 # App entry point and WebSocket setup
-    ├── classes/                  # Domain services (TicketPool, Vendor, Config)
+    ├── server.js                 # App entry point, CORS, Socket.IO setup
+    ├── classes/                  # Domain services (TicketPool, Configuration)
     ├── controllers/              # REST route handlers
-    ├── middleware/               # Auth, RBAC, ownership, validation, errors
-    ├── models/                   # Mongoose schemas (Ticket, Customer, Vendor)
-    ├── routes/                   # API route definitions
-    ├── tests/                    # Unit, integration, and concurrency tests
+    ├── middleware/               # Auth, RBAC, ownership, rateLimiter, validate
+    ├── models/                   # Mongoose schemas (Ticket, Customer, Vendor, Configuration)
+    ├── routes/                   # API route definitions (customer, vendor, config)
+    ├── tests/                    # Unit, integration, and concurrency test suites
     └── utils/                    # Structured logger, response helper, error classes
 ```
 
@@ -388,15 +409,16 @@ wavepass-ticketing-system/
 
 ## Engineering Decisions
 
-1. **MongoDB Atomicity over Global Locks for Purchases**: Rather than locking the entire application for every purchase, WavePass uses atomic conditional updates (`findOneAndUpdate` with `status: 'pending'`). This keeps the backend non-blocking, allowing parallel customer checkouts while guaranteeing zero double-allocations at the database level.
-2. **Synchronous Allocation with Real-Time Broadcasts**: The purchase endpoint directly returns the confirmed allocated tickets in the HTTP response body while simultaneously broadcasting state updates over WebSockets. This eliminates lost tickets caused by disconnected or reloaded clients.
-3. **Decoupled Domain Layer**: Core business rules and concurrency primitives are encapsulated in the `TicketPool` domain class, allowing concurrency tests to be executed independently from HTTP middleware and headers.
+1. **Document-Level Conditional Atomicity over Global Locks for Purchases**: Rather than locking the whole server for purchases, WavePass uses atomic conditional updates (`findOneAndUpdate` matching `status: "available"`). This keeps the system responsive under high concurrency while mathematically eliminating double-allocations.
+2. **Single Source of Truth for Ownership**: Eliminating the redundant `Customer.ticketsPurchased` array removes multi-document dual-write failure modes without the performance penalty of multi-document distributed transactions.
+3. **Mutex Synchronization for Capacity Boundaries**: Mutual exclusion is reserved strictly where multi-step checks are required: ensuring releases and refunds do not exceed `maxTicketCapacity` or `totalTickets`.
+4. **Honest Test Reporting**: No silent early returns that mask unexecuted database tests. If MongoDB is offline, database tests are explicitly reported as skipped.
 
 ---
 
 ## Future Improvements
 
-- **Distributed Locks**: Integrate Redis with Redlock for cross-instance mutual exclusion when scaling the backend across multiple container instances.
-- **Idempotency Keys**: Accept `Idempotency-Key` headers on purchase endpoints to protect against duplicate orders from client network retries.
-- **Message Queue Ingress**: Buffer high-volume ticket requests through RabbitMQ or Apache Kafka during flash-sale events to prevent database connection saturation.
-- **Payment Gateway Integration**: Connect checkout to Stripe Elements or PayPal SDK with webhook signature validation.
+- **Distributed Locks**: Integrate Redis with Redlock for cross-process synchronization if horizontally scaling across multiple backend instances.
+- **Idempotency Keys**: Add `Idempotency-Key` headers on purchase requests to prevent duplicate orders from client-side network retries.
+- **Message Queue Ingress**: Buffer high-volume ticket purchase requests through RabbitMQ or Apache Kafka during flash-sale events to protect database connections.
+- **Payment Gateway Integration**: Connect checkout to Stripe Elements with webhook signature verification.

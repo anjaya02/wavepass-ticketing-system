@@ -1,6 +1,7 @@
 import React, { useState, FormEvent, useContext } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import axios, { AxiosError } from "axios";
+import api from "../services/api";
 import { AuthContext } from "../context/AuthContext";
 
 interface LoginResponse {
@@ -65,10 +66,7 @@ const CustomerLogin: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const apiUrl = "http://localhost:5000/api/customers/login";
-      console.log("API URL:", apiUrl);
-
-      const response = await axios.post<LoginResponse>(apiUrl, {
+      const response = await api.post<LoginResponse>("/customers/login", {
         email,
         password,
       });

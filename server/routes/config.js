@@ -10,13 +10,7 @@ const validate = require("../middleware/validate");
 router.get("/", configController.getConfiguration);
 
 // Endpoint to get customer retrieval rate
-router.get("/customer-retrieval-rate", async (req, res, next) => {
-  try {
-    const configuration = await configController.getConfiguration(req, res, next);
-  } catch (error) {
-    next(error);
-  }
-});
+router.get("/customer-retrieval-rate", configController.getConfiguration);
 
 // Update configuration (restricted to vendor/admin)
 router.post(

@@ -3,6 +3,7 @@ import { Pie } from "react-chartjs-2";
 import Modal from "./Modal";
 import { Chart, ArcElement, Tooltip, Legend } from "chart.js";
 import { useNavigate } from "react-router-dom";
+import axios from "axios";
 import { useSocket } from "../context/SocketContext";
 import socketEvents from "../utils/socketEvents";
 import {
@@ -16,7 +17,7 @@ import {
   ConfigurationData,
 } from "../types/types";
 
-import {
+import api, {
   fetchTotalReleasedTickets,
   fetchSoldTickets,
   fetchReleasedTickets,
@@ -365,31 +366,17 @@ const VendorDashboard: React.FC = () => {
         }
 
         // Fetch Configuration
-        const configResponse = await fetch(
-          `${
-            import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api"
-          }/config/`,
-          {
-            method: "GET",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
+        try {
+          const configResponse = await api.get<ConfigurationData>("/config/");
+          if (configResponse.data) {
+            dispatch({ type: 'SET_MAX_CAPACITY', payload: configResponse.data.maxTicketCapacity });
           }
-        );
-
-        if (configResponse.ok) {
-          const config: ConfigurationData = await configResponse.json();
-          dispatch({ type: 'SET_MAX_CAPACITY', payload: config.maxTicketCapacity });
-        } else if (configResponse.status === 404) {
-          // No existing configuration; handle accordingly
-          console.warn(
-            "No existing configuration found. Using default maxCapacity."
-          );
-          dispatch({ type: 'SET_MAX_CAPACITY', payload: 200 }); // Default or prompt user to set
-        } else {
-          const data = await configResponse.json();
-          throw new Error(data.message || "Failed to fetch configurations.");
+        } catch (configErr: unknown) {
+          if (axios.isAxiosError(configErr) && configErr.response?.status === 404) {
+            dispatch({ type: 'SET_MAX_CAPACITY', payload: 200 }); // Default
+          } else {
+            throw configErr;
+          }
         }
 
         // Fetch Sold Tickets

@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback, memo } from "react";
 import Modal from "./Modal";
 import ConfigurationForm from "./ConfigurationForm";
 import { useNavigate } from "react-router-dom";
+import api from "../services/api";
+import axios from "axios";
 
 interface ConfigurationData {
   totalTickets: number;
@@ -164,92 +166,43 @@ const VendorTicketManagement: React.FC = () => {
 
   const navigate = useNavigate();
 
-  // Helper function to get the token
-  const getToken = useCallback(() => {
-    return localStorage.getItem("token");
-  }, []);
-
   // Fetch Configuration Function
   const fetchConfiguration = useCallback(async () => {
     try {
-      const token = getToken();
-      if (!token) {
-        setModalMessage("Your session has expired. Please log in again.");
-        setIsModalOpen(true);
-        navigate("/vendor/login", { replace: true });
+      const response = await api.get<ConfigurationData>("/config/");
+      setConfiguration(response.data);
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        setConfiguration(null);
         return;
       }
-
-      const response = await fetch("http://localhost:5000/api/config/", {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) {
-        if (response.status === 404) {
-          // No existing configuration; set to null or default
-          setConfiguration(null);
-          return;
-        }
-        const data = await response.json();
-        throw new Error(data.message || "Failed to fetch configurations.");
-      }
-
-      const config: ConfigurationData = await response.json();
-      setConfiguration(config);
-    } catch (error: unknown) {
-      if (error instanceof Error) {
-        setModalMessage(error.message);
-      } else {
-        setModalMessage("An unexpected error occurred.");
-      }
+      const message =
+        axios.isAxiosError(error) && error.response?.data?.message
+          ? error.response.data.message
+          : error instanceof Error
+          ? error.message
+          : "Failed to fetch configurations.";
+      setModalMessage(message);
       setIsModalOpen(true);
     }
-  }, [getToken, navigate]);
+  }, []);
 
   // Fetch Ticket Data Function
   const fetchTicketData = useCallback(async () => {
     try {
-      const token = getToken();
-      if (!token) {
-        setModalMessage("Your session has expired. Please log in again.");
-        setIsModalOpen(true);
-        navigate("/vendor/login", { replace: true });
-        return;
-      }
-
-      const response = await fetch(
-        "http://localhost:5000/api/vendor/ticket-pool",
-        {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.message || "Failed to fetch ticket data.");
-      }
-
-      const data: TicketManagementData = await response.json();
-      console.log("Ticket data fetched:", data);
-      console.log("Type of availableTickets:", typeof data.availableTickets);
-      setTicketData(data);
+      const response = await api.get<TicketManagementData>("/vendor/ticket-pool");
+      setTicketData(response.data);
     } catch (error: unknown) {
-      if (error instanceof Error) {
-        setModalMessage(error.message);
-      } else {
-        setModalMessage("An unexpected error occurred.");
-      }
+      const message =
+        axios.isAxiosError(error) && error.response?.data?.message
+          ? error.response.data.message
+          : error instanceof Error
+          ? error.message
+          : "Failed to fetch ticket data.";
+      setModalMessage(message);
       setIsModalOpen(true);
     }
-  }, [getToken, navigate]);
+  }, []);
 
   // Fetch Configuration and Ticket Data on Component Mount
   useEffect(() => {
@@ -288,50 +241,26 @@ const VendorTicketManagement: React.FC = () => {
     }
 
     try {
-      const token = getToken();
-      if (!token) {
-        setModalMessage("Your session has expired. Please log in again.");
-        setIsModalOpen(true);
-        navigate("/vendor/login", { replace: true });
-        return;
-      }
-
-      const response = await fetch(
-        "http://localhost:5000/api/vendor/add-tickets",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ ticketCount: ticketsToRelease }),
-        }
-      );
-
-      const data = await response.json();
-
-      console.log("API Response Data:", data);
-
-      if (!response.ok) {
-        console.error("Error response data:", data);
-        const errorMessage = data.message || "Failed to add tickets.";
-        throw new Error(errorMessage);
-      }
+      const response = await api.post("/vendor/add-tickets", {
+        ticketCount: ticketsToRelease,
+      });
 
       // Refresh ticket data to reflect the latest state
       await fetchTicketData();
 
       setModalMessage(
-        `Successfully added ${ticketsToRelease} tickets to the pool.`
+        response.data?.message || `Successfully added ${ticketsToRelease} tickets to the pool.`
       );
       setIsModalOpen(true);
       setTicketsToRelease(0);
     } catch (error: unknown) {
-      if (error instanceof Error) {
-        setModalMessage(error.message);
-      } else {
-        setModalMessage("An unexpected error occurred.");
-      }
+      const message =
+        axios.isAxiosError(error) && error.response?.data?.message
+          ? error.response.data.message
+          : error instanceof Error
+          ? error.message
+          : "Failed to add tickets.";
+      setModalMessage(message);
       setIsModalOpen(true);
     }
   }, [
@@ -339,59 +268,28 @@ const VendorTicketManagement: React.FC = () => {
     configuration,
     ticketData.availableTickets,
     fetchTicketData,
-    getToken,
-    navigate,
   ]);
 
   // Handle Viewing My Tickets
   const handleViewMyTickets = useCallback(async () => {
-    console.log("View Tickets button clicked");
     try {
       setLoadingTickets(true);
-      const token = getToken();
-      if (!token) {
-        console.log("No token found, redirecting to login");
-        setModalMessage("Your session has expired. Please log in again.");
-        setIsModalOpen(true);
-        navigate("/vendor/login", { replace: true });
-        return;
-      }
-
-      const response = await fetch(
-        "http://localhost:5000/api/vendor/my-tickets",
-        {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        console.error("Error fetching tickets:", data);
-        const errorMessage = data.message || "Failed to fetch your tickets.";
-        throw new Error(errorMessage);
-      }
-
-      console.log("Tickets fetched successfully:", data);
-      setMyTickets(data.tickets);
+      const response = await api.get<{ tickets: Ticket[] }>("/vendor/my-tickets");
+      setMyTickets(response.data?.tickets || []);
       setIsTicketsModalOpen(true);
     } catch (error: unknown) {
-      if (error instanceof Error) {
-        console.log("Error in handleViewMyTickets:", error.message);
-        setModalMessage(error.message);
-      } else {
-        setModalMessage("An unexpected error occurred.");
-      }
+      const message =
+        axios.isAxiosError(error) && error.response?.data?.message
+          ? error.response.data.message
+          : error instanceof Error
+          ? error.message
+          : "Failed to fetch your tickets.";
+      setModalMessage(message);
       setIsModalOpen(true);
     } finally {
       setLoadingTickets(false);
-      console.log("handleViewMyTickets completed");
     }
-  }, [getToken, navigate]);
+  }, []);
 
   // Handle Navigation Buttons
   const navigateToStartRelease = useCallback(() => {

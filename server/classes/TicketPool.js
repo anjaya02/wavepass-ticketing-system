@@ -28,6 +28,7 @@ const safelyGetIO = () => {
  * and real-time event notifications.
  */
 class TicketPool {
+  #totalTickets;
   #maxCapacity;
   #mutex;
   #ticketReleaseRate;
@@ -37,12 +38,31 @@ class TicketPool {
     if (TicketPool.instance) {
       return TicketPool.instance;
     }
+    this.#totalTickets = 500;
     this.#maxCapacity = 200;
     this.#ticketReleaseRate = 10000;
     this.#customerRetrievalRate = 15000;
     this.#mutex = new Mutex();
     TicketPool.instance = this;
     logger.info("TicketPool singleton instance created.");
+  }
+
+  async initialize({ totalTickets, ticketReleaseRate, customerRetrievalRate, maxTicketCapacity } = {}) {
+    if (totalTickets) this.setTotalTickets(totalTickets);
+    if (maxTicketCapacity) this.setMaxCapacity(maxTicketCapacity);
+    if (ticketReleaseRate) this.#ticketReleaseRate = parseInt(ticketReleaseRate, 10);
+    if (customerRetrievalRate) this.#customerRetrievalRate = parseInt(customerRetrievalRate, 10);
+  }
+
+  getTotalTickets() {
+    return this.#totalTickets;
+  }
+
+  setTotalTickets(total) {
+    const val = parseInt(total, 10);
+    if (!isNaN(val) && val > 0) {
+      this.#totalTickets = val;
+    }
   }
 
   getMaxCapacity() {
@@ -111,14 +131,18 @@ class TicketPool {
     // Critical Section: Calculate space and insert tickets atomically under mutex
     await this.#mutex.runExclusive(async () => {
       const availableSpace = await this.getAvailableSpace(session);
+      const totalCreated = await Ticket.countDocuments({});
+      const remainingTotalTickets = Math.max(0, this.#totalTickets - totalCreated);
 
-      if (availableSpace <= 0) {
+      const allowedToAdd = Math.min(count, availableSpace, remainingTotalTickets);
+
+      if (allowedToAdd <= 0) {
         ticketsActuallyAdded = 0;
         ticketsNotAdded = count;
         return;
       }
 
-      ticketsActuallyAdded = Math.min(count, availableSpace);
+      ticketsActuallyAdded = allowedToAdd;
       ticketsNotAdded = count - ticketsActuallyAdded;
 
       const price = getFixedTicketPrice();
@@ -311,28 +335,33 @@ class TicketPool {
    * @returns {Promise<Document|null>}
    */
   async refundTicket(ticketId, customerId) {
-    // Check if re-adding would exceed maxCapacity
-    const availableSpace = await this.getAvailableSpace();
-    if (availableSpace <= 0) {
-      throw new Error("Cannot refund ticket: ticket pool is at maximum capacity.");
-    }
+    let updatedTicket = null;
 
-    // Atomic conditional refund: Ticket must match ticketId, must belong to customerId, and must be sold
-    const updatedTicket = await Ticket.findOneAndUpdate(
-      {
-        _id: ticketId,
-        owner: customerId,
-        status: "sold",
-      },
-      {
-        $set: {
-          status: "available",
-          owner: null,
-          updatedAt: new Date(),
+    // Mutex protects capacity check and status update to guarantee:
+    // available tickets <= maxTicketCapacity even under concurrent vendor releases
+    await this.#mutex.runExclusive(async () => {
+      const availableSpace = await this.getAvailableSpace();
+      if (availableSpace <= 0) {
+        throw new Error("Cannot refund ticket: ticket pool is at maximum capacity.");
+      }
+
+      // Atomic conditional refund: Ticket must match ticketId, must belong to customerId, and must be sold
+      updatedTicket = await Ticket.findOneAndUpdate(
+        {
+          _id: ticketId,
+          owner: customerId,
+          status: "sold",
         },
-      },
-      { new: true }
-    );
+        {
+          $set: {
+            status: "available",
+            owner: null,
+            updatedAt: new Date(),
+          },
+        },
+        { new: true }
+      );
+    });
 
     if (!updatedTicket) {
       return null;

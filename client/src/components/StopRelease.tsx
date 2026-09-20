@@ -1,6 +1,8 @@
 import React, { useState } from "react";
 import Modal from "./Modal";
 import { useNavigate } from "react-router-dom"; 
+import api from "../services/api";
+import axios from "axios";
 
 const StopRelease: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
@@ -9,31 +11,17 @@ const StopRelease: React.FC = () => {
 
   const handleStopRelease = async () => {
     try {
-      const authToken = localStorage.getItem("authToken");
-      if (!authToken) throw new Error("User is not authenticated.");
-
-      const response = await fetch("http://localhost:5000/api/vendor/stop-release", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || "Failed to stop ticket release.");
-      }
-
-      setModalMessage(data.message || "Ticket release stopped successfully.");
+      const response = await api.post("/vendor/stop-release");
+      setModalMessage(response.data?.message || "Ticket release stopped successfully.");
       setIsModalOpen(true);
     } catch (error: unknown) {
-      if (error instanceof Error) {
-        setModalMessage(error.message);
-      } else {
-        setModalMessage("An unexpected error occurred.");
-      }
+      const message =
+        axios.isAxiosError(error) && error.response?.data?.message
+          ? error.response.data.message
+          : error instanceof Error
+          ? error.message
+          : "An unexpected error occurred.";
+      setModalMessage(message);
       setIsModalOpen(true);
     }
   };

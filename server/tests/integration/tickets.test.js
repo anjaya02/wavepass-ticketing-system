@@ -1,19 +1,15 @@
 const request = require("supertest");
-const mongoose = require("mongoose");
 const { app } = require("../../server");
 const ticketPool = require("../../classes/TicketPool");
+const { describeIfDb } = require("../dbCheck");
 
-const isDbConnected = () => mongoose.connection.readyState === 1;
-
-describe("Tickets & Purchasing API Integration Tests", () => {
+describeIfDb("Tickets & Purchasing API Integration Tests", () => {
   let vendorToken;
   let customerToken;
   let customerId;
   let otherCustomerId;
 
   beforeEach(async () => {
-    if (!isDbConnected()) return;
-
     await ticketPool.initialize({
       totalTickets: 200,
       ticketReleaseRate: 5000,
@@ -54,8 +50,6 @@ describe("Tickets & Purchasing API Integration Tests", () => {
   });
 
   test("Vendor releases tickets, customer purchases, availability updates correctly", async () => {
-    if (!isDbConnected()) return;
-
     const addRes = await request(app)
       .post("/api/vendor/add-tickets")
       .set("Authorization", `Bearer ${vendorToken}`)
@@ -95,8 +89,6 @@ describe("Tickets & Purchasing API Integration Tests", () => {
   });
 
   test("Customer cannot purchase more tickets than are available in the pool", async () => {
-    if (!isDbConnected()) return;
-
     await request(app)
       .post("/api/vendor/add-tickets")
       .set("Authorization", `Bearer ${vendorToken}`)
@@ -121,8 +113,6 @@ describe("Tickets & Purchasing API Integration Tests", () => {
   });
 
   test("Role Isolation: Customer cannot call vendor endpoints (403 Forbidden)", async () => {
-    if (!isDbConnected()) return;
-
     const res = await request(app)
       .post("/api/vendor/add-tickets")
       .set("Authorization", `Bearer ${customerToken}`)
@@ -133,8 +123,6 @@ describe("Tickets & Purchasing API Integration Tests", () => {
   });
 
   test("Ownership Isolation: Customer A cannot purchase tickets for Customer B (403 Forbidden)", async () => {
-    if (!isDbConnected()) return;
-
     const res = await request(app)
       .post(`/api/customers/${otherCustomerId}/purchase`)
       .set("Authorization", `Bearer ${customerToken}`)

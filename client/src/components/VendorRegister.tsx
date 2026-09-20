@@ -1,6 +1,6 @@
 import React, { useState, FormEvent } from "react";
 import { Link } from "react-router-dom";
-import axios from "axios";
+import api from "../services/api";
 
 interface RegisterResponse {
   success: boolean;
@@ -65,9 +65,7 @@ const VendorRegister: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const apiUrl = "http://localhost:5000/api/vendor/register";
-
-      const response = await axios.post<RegisterResponse>(apiUrl, {
+      const response = await api.post<RegisterResponse>("/vendor/register", {
         name,
         email,
         password,

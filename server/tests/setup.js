@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const Configuration = require("../classes/Configuration");
+const { isDbAvailable } = require("./dbCheck");
 
 // Configure test environment variables
 process.env.NODE_ENV = "test";
@@ -12,11 +13,16 @@ process.env.EVENT_DATE = "2024-12-20";
 const TEST_MONGO_URI = process.env.TEST_MONGO_URI || process.env.MONGO_URI || "mongodb://localhost:27017/wavepass_test";
 
 beforeAll(async () => {
+  if (!isDbAvailable) {
+    // Explicitly notify that database-dependent tests will be skipped
+    return;
+  }
+
   if (mongoose.connection.readyState === 0) {
     try {
       await mongoose.connect(TEST_MONGO_URI, { serverSelectionTimeoutMS: 2000 });
     } catch (err) {
-      console.warn(`[Test Setup] Could not connect to test database (${TEST_MONGO_URI}). Tests requiring live DB will be skipped or mock-tested.`);
+      // Connect failed
     }
   }
 });

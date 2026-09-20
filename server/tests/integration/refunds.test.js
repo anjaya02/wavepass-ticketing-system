@@ -1,11 +1,9 @@
 const request = require("supertest");
-const mongoose = require("mongoose");
 const { app } = require("../../server");
 const ticketPool = require("../../classes/TicketPool");
+const { describeIfDb } = require("../dbCheck");
 
-const isDbConnected = () => mongoose.connection.readyState === 1;
-
-describe("Refunds API Integration Tests", () => {
+describeIfDb("Refunds API Integration Tests", () => {
   let vendorToken;
   let customer1Token;
   let customer1Id;
@@ -14,8 +12,6 @@ describe("Refunds API Integration Tests", () => {
   let purchasedTicketId;
 
   beforeEach(async () => {
-    if (!isDbConnected()) return;
-
     await ticketPool.initialize({
       totalTickets: 100,
       ticketReleaseRate: 1000,
@@ -68,8 +64,6 @@ describe("Refunds API Integration Tests", () => {
   });
 
   test("Valid refund returns ticket to pool and increases availability", async () => {
-    if (!isDbConnected()) return;
-
     const refundRes = await request(app)
       .post(`/api/customers/${customer1Id}/refund`)
       .set("Authorization", `Bearer ${customer1Token}`)
@@ -84,8 +78,6 @@ describe("Refunds API Integration Tests", () => {
   });
 
   test("Customer cannot refund a ticket they do not own", async () => {
-    if (!isDbConnected()) return;
-
     const refundRes = await request(app)
       .post(`/api/customers/${customer2Id}/refund`)
       .set("Authorization", `Bearer ${customer2Token}`)
@@ -96,8 +88,6 @@ describe("Refunds API Integration Tests", () => {
   });
 
   test("Repeated refund attempt is rejected cleanly", async () => {
-    if (!isDbConnected()) return;
-
     await request(app)
       .post(`/api/customers/${customer1Id}/refund`)
       .set("Authorization", `Bearer ${customer1Token}`)
@@ -113,8 +103,6 @@ describe("Refunds API Integration Tests", () => {
   });
 
   test("Customer A cannot call refund route of Customer B (403 Forbidden)", async () => {
-    if (!isDbConnected()) return;
-
     const res = await request(app)
       .post(`/api/customers/${customer2Id}/refund`)
       .set("Authorization", `Bearer ${customer1Token}`)

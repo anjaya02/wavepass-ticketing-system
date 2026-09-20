@@ -104,12 +104,15 @@ const getCustomerTickets = async (req, res, next) => {
   try {
     const { customerId } = req.params;
 
-    const customer = await Customer.findById(customerId).populate("ticketsPurchased");
+    const customer = await Customer.findById(customerId);
     if (!customer) {
       return errorResponse(res, 404, "Customer not found.", "CUSTOMER_NOT_FOUND");
     }
 
-    const ticketsPurchased = (customer.ticketsPurchased || []).map((ticket) => ({
+    // Single source of truth: directly query sold tickets owned by this customer
+    const tickets = await Ticket.find({ owner: customerId, status: "sold" }).lean();
+
+    const ticketsPurchased = tickets.map((ticket) => ({
       id: ticket._id.toString(),
       status: ticket.status,
       owner: ticket.owner ? ticket.owner.toString() : null,
