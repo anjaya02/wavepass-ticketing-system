@@ -197,7 +197,7 @@ Maintaining dual writes across two separate collections without distributed mult
 
 | Parameter | Domain Meaning | Enforcement |
 | :--- | :--- | :--- |
-| `totalTickets` | **Lifetime Event Ticket Supply**: The absolute maximum number of tickets that can ever be created/minted across all vendors for the event. | Checked under mutex in `TicketPool.addTickets()`: `Ticket.countDocuments({}) + batch <= totalTickets`. |
+| `totalTickets` | Maximum number of ticket records allowed in the system at one time. | Checked under mutex in `TicketPool.addTickets()`: `Ticket.countDocuments({}) + batch <= totalTickets`. |
 | `maxTicketCapacity` | **Concurrent Pool Capacity**: The maximum number of *currently available* tickets that can sit in the pool buffer at any single moment. | Checked under mutex in `addTickets()` and `refundTicket()`: `availableCount <= maxTicketCapacity`. |
 
 ---
@@ -219,11 +219,9 @@ Socket.IO authentication validates JWT tokens during the connection handshake (`
 
 | Event Name | Direction | Payload | Description |
 | :--- | :--- | :--- | :--- |
-| `initialData` | Server -> Connected Client | `{ availableTickets, soldTickets, totalReleasedTickets, maxCapacity }` | Emitted upon successful authenticated connection. |
 | `ticketUpdate` | Server -> Broadcast | `{ availableTickets, totalReleasedTickets }` | Emitted when available inventory changes. |
 | `vendorReleasedTickets`| Server -> Broadcast | `{ releasedTickets, vendorId }` | Emitted when a vendor adds tickets to the pool. |
 | `ticketSold` | Server -> Broadcast | `{ ticketId, customerId, price }` | Emitted when a ticket is purchased. |
-| `purchaseSuccess` | Server -> Broadcast | `{ customerId, ticketsPurchased }` | Emitted when a purchase batch succeeds. |
 | `purchaseFailure` | Server -> Broadcast | `{ customerId, message }` | Emitted when a purchase fails (e.g. out of stock). |
 | `ticketRefunded` | Server -> Broadcast | `{ ticketId, customerId }` | Emitted when a ticket is refunded. |
 | `systemStatus` | Server -> Broadcast | `{ status, message }` | Emitted for operational status notices. |

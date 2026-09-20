@@ -10,7 +10,7 @@ process.env.TICKET_PRICE = "2800";
 process.env.EVENT_NAME = "WavePass: Your Boat Ride Ticketing System";
 process.env.EVENT_DATE = "2024-12-20";
 
-const TEST_MONGO_URI = process.env.TEST_MONGO_URI || process.env.MONGO_URI || "mongodb://localhost:27017/wavepass_test";
+const TEST_MONGO_URI = process.env.TEST_MONGO_URI || "mongodb://localhost:27017/wavepass_test";
 
 beforeAll(async () => {
   if (!isDbAvailable) {
@@ -30,9 +30,14 @@ beforeAll(async () => {
 afterEach(async () => {
   // Clear collections if connected
   if (mongoose.connection.readyState === 1) {
-    const collections = mongoose.connection.collections;
-    for (const key in collections) {
-      await collections[key].deleteMany({});
+    const dbName = mongoose.connection.db.databaseName;
+    if (dbName.includes("test")) {
+      const collections = mongoose.connection.collections;
+      for (const key in collections) {
+        await collections[key].deleteMany({});
+      }
+    } else {
+      console.warn(`Safety guard: Refused to clear non-test database "${dbName}".`);
     }
   }
 

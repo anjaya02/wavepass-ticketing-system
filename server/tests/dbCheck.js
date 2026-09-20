@@ -2,7 +2,7 @@ const { spawnSync } = require("child_process");
 const url = require("url");
 
 function checkMongoReachable() {
-  const uri = process.env.TEST_MONGO_URI || process.env.MONGO_URI || "mongodb://localhost:27017/wavepass_test";
+  const uri = process.env.TEST_MONGO_URI || "mongodb://localhost:27017/wavepass_test";
   
   let host = "127.0.0.1";
   let port = 27017;
