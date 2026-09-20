@@ -1,4 +1,5 @@
 const ConfigurationModel = require("../models/configuration");
+const logger = require("../utils/logger");
 
 class Configuration {
   #totalTickets;
@@ -18,22 +19,29 @@ class Configuration {
     this.setMaxTicketCapacity(maxTicketCapacity);
   }
 
-  // Singleton Instance
+  /**
+   * Resets the singleton instance in memory (crucial for isolated test suites)
+   */
+  static resetInstance() {
+    Configuration.instance = null;
+  }
+
+  /**
+   * Retrieves the Singleton Instance of Configuration, loading from MongoDB or initializing defaults.
+   */
   static async getInstance() {
     if (!Configuration.instance) {
-      // Load from the database or create default
       let configDoc = await ConfigurationModel.findOne({ singleton: true });
       if (!configDoc) {
-        // Create default configuration
         configDoc = new ConfigurationModel({
           totalTickets: 500,
-          ticketReleaseRate: 10000, // ms
-          customerRetrievalRate: 15000, // ms
+          ticketReleaseRate: 10000,
+          customerRetrievalRate: 15000,
           maxTicketCapacity: 200,
           singleton: true,
         });
         await configDoc.save();
-        console.log("Default configuration created.");
+        logger.info("Default system configuration created in database.");
       }
 
       Configuration.instance = new Configuration(
@@ -65,59 +73,67 @@ class Configuration {
 
   // Setters with validation
   setTotalTickets(totalTickets) {
-    if (totalTickets > 0) {
-      this.#totalTickets = totalTickets;
+    const val = parseInt(totalTickets, 10);
+    if (!isNaN(val) && val > 0) {
+      this.#totalTickets = val;
     } else {
-      throw new Error("Total tickets must be a positive number");
+      throw new Error("Total tickets must be a positive integer.");
     }
   }
 
   setTicketReleaseRate(ticketReleaseRate) {
-    if (ticketReleaseRate > 0) {
-      this.#ticketReleaseRate = ticketReleaseRate;
+    const val = parseInt(ticketReleaseRate, 10);
+    if (!isNaN(val) && val > 0) {
+      this.#ticketReleaseRate = val;
     } else {
-      throw new Error("Ticket release rate must be a positive number");
+      throw new Error("Ticket release rate must be a positive integer (ms).");
     }
   }
 
   setCustomerRetrievalRate(customerRetrievalRate) {
-    if (customerRetrievalRate > 0) {
-      this.#customerRetrievalRate = customerRetrievalRate;
+    const val = parseInt(customerRetrievalRate, 10);
+    if (!isNaN(val) && val > 0) {
+      this.#customerRetrievalRate = val;
     } else {
-      throw new Error("Customer retrieval rate must be a positive number");
+      throw new Error("Customer retrieval rate must be a positive integer (ms).");
     }
   }
 
   setMaxTicketCapacity(maxTicketCapacity) {
-    if (maxTicketCapacity > 0 && maxTicketCapacity < this.#totalTickets) {
-      this.#maxTicketCapacity = maxTicketCapacity;
-    } else {
-      throw new Error(
-        "Max ticket capacity must be less than total tickets and positive"
-      );
+    const val = parseInt(maxTicketCapacity, 10);
+    if (isNaN(val) || val <= 0) {
+      throw new Error("Max ticket capacity must be a positive integer.");
     }
+    if (val >= this.#totalTickets) {
+      throw new Error("Max ticket capacity must be strictly less than total tickets.");
+    }
+    this.#maxTicketCapacity = val;
   }
 
-  // Method to update configuration in the database and in-memory
+  /**
+   * Updates configuration in database and synchronizes in-memory singleton.
+   */
   async updateConfiguration({
     totalTickets,
     ticketReleaseRate,
     customerRetrievalRate,
     maxTicketCapacity,
   }) {
-    // Validate maxTicketCapacity < totalTickets
-    if (maxTicketCapacity >= totalTickets) {
-      throw new Error("Max ticket capacity must be less than total tickets");
+    const total = parseInt(totalTickets, 10);
+    const maxCap = parseInt(maxTicketCapacity, 10);
+    const releaseRate = parseInt(ticketReleaseRate, 10);
+    const retrievalRate = parseInt(customerRetrievalRate, 10);
+
+    if (maxCap >= total) {
+      throw new Error("Max ticket capacity must be strictly less than total tickets.");
     }
 
-    // Update the properties
-    this.setTotalTickets(totalTickets);
-    this.setTicketReleaseRate(ticketReleaseRate);
-    this.setCustomerRetrievalRate(customerRetrievalRate);
-    this.setMaxTicketCapacity(maxTicketCapacity);
+    this.setTotalTickets(total);
+    this.setMaxTicketCapacity(maxCap);
+    this.setTicketReleaseRate(releaseRate);
+    this.setCustomerRetrievalRate(retrievalRate);
 
-    // Update in the database
-    await ConfigurationModel.findOneAndUpdate(
+    const updatedDoc = await ConfigurationModel.findOneAndUpdate(
       { singleton: true },
       {
         totalTickets: this.#totalTickets,
@@ -128,30 +144,32 @@ class Configuration {
       { new: true, upsert: true }
     );
 
-    console.log("Configuration updated successfully.");
+    logger.info("System configuration successfully updated and persisted.");
+    return updatedDoc;
   }
 
-  // Method to reset configuration to default
+  /**
+   * Resets configuration to default baseline values.
+   */
   async resetConfiguration() {
-    // Reset to default values
     this.setTotalTickets(500);
+    this.setMaxTicketCapacity(200);
     this.setTicketReleaseRate(10000);
     this.setCustomerRetrievalRate(15000);
-    this.setMaxTicketCapacity(200);
 
-    // Update in the database
-    await ConfigurationModel.findOneAndUpdate(
+    const doc = await ConfigurationModel.findOneAndUpdate(
       { singleton: true },
       {
-        totalTickets: this.#totalTickets,
-        ticketReleaseRate: this.#ticketReleaseRate,
-        customerRetrievalRate: this.#customerRetrievalRate,
-        maxTicketCapacity: this.#maxTicketCapacity,
+        totalTickets: 500,
+        ticketReleaseRate: 10000,
+        customerRetrievalRate: 15000,
+        maxTicketCapacity: 200,
       },
       { new: true, upsert: true }
     );
 
-    console.log("Configuration reset to default successfully.");
+    logger.info("System configuration reset to default baseline.");
+    return doc;
   }
 }
 

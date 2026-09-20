@@ -1,71 +1,63 @@
 const jwt = require("jsonwebtoken");
 const Customer = require("../models/customer");
 const Vendor = require("../models/vendor");
-const dotenv = require("dotenv");
 const logger = require("../utils/logger");
+const { errorResponse } = require("../utils/apiResponse");
 
-dotenv.config(); // Load environment variables
-
-const authenticate = async (req, res, next) => {
+/**
+ * Authentication middleware that verifies the JWT token and attaches
+ * the authenticated user identity to `req.user`.
+ */
+const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers["authorization"];
-  // Expected format: "Bearer <token>"
-  const token = authHeader && authHeader.split(" ")[1];
+  const token = authHeader && authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
 
   if (!token) {
-    logger.warn("No token provided for authorization.");
-    return res
-      .status(401)
-      .json({ message: "No token provided, authorization denied." });
+    return errorResponse(
+      res,
+      401,
+      "Access denied. No authentication token provided.",
+      "UNAUTHENTICATED"
+    );
   }
 
   try {
-    // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     let user;
     if (decoded.role === "customer") {
-      user = await Customer.findById(decoded.id).select("-password"); // Exclude password
+      user = await Customer.findById(decoded.id).select("-password");
       if (!user) {
-        logger.warn(`Customer not found: ID ${decoded.id}`);
-        return res
-          .status(401)
-          .json({ message: "Customer not found, authorization denied." });
+        return errorResponse(res, 401, "Customer account not found or deactivated.", "USER_NOT_FOUND");
       }
     } else if (decoded.role === "vendor") {
-      user = await Vendor.findById(decoded.id).select("-password"); // Exclude password
+      user = await Vendor.findById(decoded.id).select("-password");
       if (!user) {
-        logger.warn(`Vendor not found: ID ${decoded.id}`);
-        return res
-          .status(401)
-          .json({ message: "Vendor not found, authorization denied." });
+        return errorResponse(res, 401, "Vendor account not found or deactivated.", "USER_NOT_FOUND");
       }
     } else {
-      logger.warn(`Invalid user role: ${decoded.role}`);
-      return res.status(401).json({ message: "Invalid user role." });
+      return errorResponse(res, 401, "Invalid token role.", "INVALID_ROLE");
     }
 
-    // Set req.user with necessary fields
     req.user = {
-      id: user._id,
+      id: user._id.toString(),
       email: user.email,
+      name: user.name,
       role: decoded.role,
     };
 
     next();
   } catch (error) {
-    // Handle specific JWT errors
     if (error.name === "TokenExpiredError") {
-      logger.warn("Token has expired.");
-      return res.status(401).json({ message: "Token has expired." });
-    } else if (error.name === "JsonWebTokenError") {
-      logger.warn("Invalid token.");
-      return res.status(401).json({ message: "Token is not valid." });
-    } else {
-      // Log unexpected errors
-      logger.error("Unexpected error during token verification:", error);
-      return res.status(500).json({ message: "Server error." });
+      return errorResponse(res, 401, "Authentication token has expired.", "TOKEN_EXPIRED");
     }
+    if (error.name === "JsonWebTokenError") {
+      return errorResponse(res, 401, "Invalid authentication token.", "INVALID_TOKEN");
+    }
+
+    logger.error("Unexpected error during token verification:", error);
+    return errorResponse(res, 500, "Internal server error during authentication.", "INTERNAL_SERVER_ERROR");
   }
 };
 
-module.exports = authenticate;
+module.exports = authenticateToken;

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import Modal from "./Modal";
+import api from "../services/api";
 import axios from "axios";
 import { AuthContext } from "../context/AuthContext";
 import { useSocket } from "../context/SocketContext";
@@ -8,7 +9,7 @@ import { useSocket } from "../context/SocketContext";
 // Define the Ticket interface
 interface Ticket {
   id: string;
-  ticketId: string;
+  ticketId?: string;
   price: number;
   eventName: string;
   eventDate: string;
@@ -23,144 +24,99 @@ const PaymentPage: React.FC = () => {
   const [customerName, setCustomerName] = useState<string>("");
   const [customerEmail, setCustomerEmail] = useState<string>("");
   const [numberOfTickets, setNumberOfTickets] = useState<number>(1);
-  const [cardNumber, setCardNumber] = useState<string>("");
+  const [cardNumber, setCardNumber] = useState<string>("4000123456789010"); // Default simulated test card
   const [error, setError] = useState<string>("");
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isCustomerLoading, setIsCustomerLoading] = useState<boolean>(true);
 
-  // New states for ticket retrieval
+  // States for ticket retrieval
   const [purchasedTickets, setPurchasedTickets] = useState<Ticket[]>([]);
-  const [ticketsRetrieved, setTicketsRetrieved] = useState<number>(0);
-  const [isRetrievingTickets, setIsRetrievingTickets] = useState<boolean>(false);
-  const [customerRetrievalRate, setCustomerRetrievalRate] = useState<number>(1000); 
 
   // Define ticket price as a constant
   const ticketPrice: number = 2800;
-
-  // Compute total amount based on number of tickets
   const totalAmount: number = numberOfTickets * ticketPrice;
 
-  // Fetch customer details and retrieval rate
+  // Fetch customer details
   useEffect(() => {
     const fetchCustomerDetails = async () => {
       if (authToken && customerId) {
         try {
-          const response = await axios.get(
-            `http://localhost:5000/api/customers/${customerId}`,
-            {
-              headers: {
-                Authorization: `Bearer ${authToken}`,
-              },
-            }
-          );
-
+          const response = await api.get(`/customers/${customerId}`);
           if (response.data && response.data.customer) {
             setCustomerName(response.data.customer.name);
             setCustomerEmail(response.data.customer.email);
           } else {
             setError("Invalid customer data received.");
           }
-        } catch (error: unknown) {
-          if (axios.isAxiosError(error)) {
-            console.error(
-              "Error fetching customer details:",
-              error.response?.data || error.message
-            );
-            setError("Failed to fetch customer details.");
-          } else {
-            console.error("Unexpected error:", error);
-            setError("An unexpected error occurred.");
-          }
+        } catch (err: unknown) {
+          console.error("Error fetching customer details:", err);
+          setError("Failed to fetch customer profile.");
         } finally {
           setIsCustomerLoading(false);
         }
       } else {
-        setError("Authentication required. Please log in again.");
         navigate("/customer/login");
       }
     };
 
-    const fetchRetrievalRate = async () => {
-      try {
-        const response = await axios.get(
-          "http://localhost:5000/api/config/customer-retrieval-rate"
-        );
-        if (response.data && response.data.customerRetrievalRate) {
-          setCustomerRetrievalRate(response.data.customerRetrievalRate);
-        }
-      } catch (error) {
-        console.error("Error fetching customer retrieval rate:", error);
-        // Set default retrieval rate if error occurs
-        setCustomerRetrievalRate(1000);
-      }
-    };
-
     fetchCustomerDetails();
-    fetchRetrievalRate();
 
     const storedTickets = parseInt(
       localStorage.getItem("selectedTickets") || "1",
       10
     );
-    setNumberOfTickets(storedTickets);
+    setNumberOfTickets(storedTickets > 0 ? storedTickets : 1);
   }, [authToken, customerId, navigate]);
 
   // Handle card number input change
   const handleCardChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value.replace(/\s/g, ""); // Remove spaces
-    if (/^\d{0,16}$/.test(value)) {
+    const value = e.target.value.replace(/\D/g, ""); // Keep only digits
+    if (value.length <= 16) {
       setCardNumber(value);
     }
   };
 
-  // Handle form submission
+  // Handle form submission (Simulated payment flow)
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError("");
     setIsLoading(true);
 
-    // Validate card number
+    // Validate 16-digit card format for simulated validation
     if (cardNumber.length !== 16) {
-      setError("Card number must be exactly 16 digits.");
+      setError("Please enter a valid 16-digit card number.");
       setIsLoading(false);
       return;
     }
+
     try {
       if (!authToken || !customerId) {
         setError("Authentication required. Please log in again.");
         navigate("/customer/login");
-        setIsLoading(false);
         return;
       }
 
-      // Prepare API request
-      const apiUrl = `http://localhost:5000/api/customers/${customerId}/purchase`;
+      // Execute synchronous purchase through atomic backend
+      const response = await api.post(`/customers/${customerId}/purchase`, {
+        quantity: numberOfTickets,
+      });
 
-      // Make the API call without assigning the response to a variable
-      await axios.post(
-        apiUrl,
-        { quantity: numberOfTickets },
-        {
-          headers: {
-            Authorization: `Bearer ${authToken}`,
-          },
-        }
-      );
-
-      // Start ticket retrieval process
-      setIsRetrievingTickets(true);
-      setPurchasedTickets([]); // Reset purchased tickets
-      setTicketsRetrieved(0); // Reset tickets retrieved
-    } catch (error: unknown) {
-      if (axios.isAxiosError(error)) {
-        console.error("Purchase error:", error.response?.data || error.message);
-        setError(
-          error.response?.data?.message ||
-            "An error occurred during ticket purchase."
-        );
+      const tickets = response.data.purchasedTickets || response.data.data?.purchasedTickets || [];
+      if (tickets.length > 0) {
+        setPurchasedTickets(tickets);
+        setIsModalOpen(true);
       } else {
-        console.error("Unexpected error:", error);
+        setError("Tickets could not be allocated. The pool may be sold out.");
+      }
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err)) {
+        const errorMsg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "An error occurred during ticket purchase.";
+        setError(errorMsg);
+      } else {
         setError("An unexpected error occurred during ticket purchase.");
       }
     } finally {
@@ -168,36 +124,19 @@ const PaymentPage: React.FC = () => {
     }
   };
 
-  // Listen for ticket events from the backend
+  // Socket listener for real-time ticket notifications
   useEffect(() => {
     if (!socket || !customerId) {
       return;
     }
 
     const handleTicketRetrieved = (data: { ticket: Ticket }) => {
-      setPurchasedTickets((prevTickets) => [...prevTickets, data.ticket]);
-      setTicketsRetrieved((prevCount) => prevCount + 1);
-    };
-
-    const handlePurchaseComplete = () => {
-      setIsRetrievingTickets(false);
-      setIsModalOpen(true);
-    };
-
-    const handleError = (data: { message: string }) => {
-      setError(data.message || "An error occurred during ticket retrieval.");
-      setIsRetrievingTickets(false);
+      setPurchasedTickets((prev) => [...prev, data.ticket]);
     };
 
     socket.on("ticketRetrieved", handleTicketRetrieved);
-    socket.on("purchaseComplete", handlePurchaseComplete);
-    socket.on("purchaseError", handleError);
-
-    // Cleanup listeners on unmount
     return () => {
       socket.off("ticketRetrieved", handleTicketRetrieved);
-      socket.off("purchaseComplete", handlePurchaseComplete);
-      socket.off("purchaseError", handleError);
     };
   }, [socket, customerId]);
 
@@ -212,7 +151,7 @@ const PaymentPage: React.FC = () => {
     navigate("/customer/purchasedTickets");
   };
 
-  // Optional: Close modal on Esc key press
+  // Close modal on Esc key press
   useEffect(() => {
     const handleEsc = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -226,45 +165,49 @@ const PaymentPage: React.FC = () => {
   }, []);
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-800 px-4">
-      <div className="w-full max-w-md bg-gray-900 p-8 rounded-lg shadow-md">
-        <h2 className="text-2xl font-semibold text-center text-white mb-6">
-          Purchase Tickets
+    <div className="flex items-center justify-center min-h-screen bg-gray-800 px-4 py-8">
+      <div className="w-full max-w-md bg-gray-900 p-8 rounded-lg shadow-xl border border-gray-700">
+        <h2 className="text-2xl font-bold text-center text-white mb-4">
+          Complete Purchase
         </h2>
 
-        {/* Customer Details */}
-        <div className="mb-4">
-          <p className="text-gray-300">
-            <span className="font-medium">Name:</span>{" "}
-            {isCustomerLoading ? "Loading..." : customerName}
-          </p>
-          <p className="text-gray-300">
-            <span className="font-medium">Email:</span>{" "}
-            {isCustomerLoading ? "Loading..." : customerEmail}
-          </p>
-          <p className="text-gray-300">
-            <span className="font-medium">Number of Tickets:</span>{" "}
-            {numberOfTickets}
+        {/* Prominent Simulated Payment Disclaimer Badge */}
+        <div className="mb-6 p-3 bg-amber-950/60 border border-amber-500/50 rounded-lg text-amber-200 text-xs">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-sm font-bold uppercase tracking-wider text-amber-400">
+              ⚡ Simulated Payment Flow
+            </span>
+          </div>
+          <p className="text-amber-300/80 leading-relaxed">
+            This checkout simulates payment for demonstration purposes. No real financial transaction occurs, and no card information is stored.
           </p>
         </div>
 
-        {/* Total Amount */}
-        <div className="mb-6">
-          <p className="text-gray-300">
-            <span className="font-medium">Total Amount:</span> LKR{" "}
-            {totalAmount.toLocaleString()}
-          </p>
+        {/* Customer & Order Summary */}
+        <div className="mb-4 bg-gray-800 p-4 rounded-lg border border-gray-700 space-y-2 text-sm">
+          <div className="flex justify-between text-gray-300">
+            <span className="text-gray-400">Customer:</span>
+            <span className="font-medium text-white">{isCustomerLoading ? "Loading..." : customerName}</span>
+          </div>
+          <div className="flex justify-between text-gray-300">
+            <span className="text-gray-400">Email:</span>
+            <span className="font-medium text-white">{isCustomerLoading ? "Loading..." : customerEmail}</span>
+          </div>
+          <div className="flex justify-between text-gray-300">
+            <span className="text-gray-400">Ticket Quantity:</span>
+            <span className="font-semibold text-blue-400">{numberOfTickets}</span>
+          </div>
+          <div className="border-t border-gray-700 pt-2 flex justify-between text-base font-semibold">
+            <span className="text-gray-300">Total Amount:</span>
+            <span className="text-green-400">LKR {totalAmount.toLocaleString()}</span>
+          </div>
         </div>
 
         {/* Payment Form */}
         <form onSubmit={handleSubmit} noValidate>
-          {/* Card Number */}
           <div className="mb-4">
-            <label
-              htmlFor="cardNumber"
-              className="block text-gray-300 mb-2 font-medium"
-            >
-              Card Number:
+            <label htmlFor="cardNumber" className="block text-gray-300 mb-2 font-medium text-sm">
+              Card Number (16 Digits):
             </label>
             <input
               type="text"
@@ -273,18 +216,18 @@ const PaymentPage: React.FC = () => {
               value={cardNumber}
               onChange={handleCardChange}
               maxLength={16}
-              placeholder="Enter 16-digit card number"
-              className="w-full px-3 py-2 border border-gray-700 rounded bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="4000 1234 5678 9010"
+              className="w-full px-3 py-2 border border-gray-700 rounded bg-gray-700 text-white font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
               required
             />
-            <p className="text-gray-400 text-sm mt-1">
-              Please enter a valid 16-digit card number.
+            <p className="text-gray-400 text-xs mt-1">
+              Pre-filled with dummy card number for immediate testing.
             </p>
           </div>
 
           {/* Error Message */}
           {error && (
-            <div className="mb-4 text-center text-sm p-2 rounded bg-red-500 text-white">
+            <div className="mb-4 text-center text-sm p-3 rounded bg-red-900/80 border border-red-500 text-red-200">
               {error}
             </div>
           )}
@@ -292,90 +235,68 @@ const PaymentPage: React.FC = () => {
           {/* Pay Button */}
           <button
             type="submit"
-            className={`w-full py-2 px-4 bg-blue-600 text-white font-semibold rounded hover:bg-blue-700 transition-colors ${
+            className={`w-full py-3 px-4 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors shadow-md ${
               isLoading ? "opacity-50 cursor-not-allowed" : ""
             }`}
             disabled={isLoading}
           >
-            {isLoading
-              ? "Processing..."
-              : `Pay LKR ${totalAmount.toLocaleString()}`}
+            {isLoading ? "Allocating Tickets..." : `Confirm & Pay LKR ${totalAmount.toLocaleString()}`}
           </button>
         </form>
-
-        {/* Ticket Retrieval Progress */}
-        {isRetrievingTickets && (
-          <div className="mt-6 text-center text-white">
-            <p>
-              Retrieving tickets: {ticketsRetrieved} / {numberOfTickets}
-            </p>
-            <p>
-              Retrieval Rate: {customerRetrievalRate / 1000} seconds per ticket
-            </p>
-          </div>
-        )}
       </div>
 
       {/* Success Modal */}
       {isModalOpen && (
         <Modal>
-          <div className="bg-white rounded-lg shadow-lg p-6 max-w-lg mx-auto relative">
-            {/* Close Button */}
+          <div className="bg-gray-900 border border-gray-700 text-white rounded-lg shadow-2xl p-6 max-w-lg mx-auto relative">
             <button
               onClick={() => setIsModalOpen(false)}
-              className="absolute top-4 right-4 text-gray-500 hover:text-gray-700 focus:outline-none"
+              className="absolute top-4 right-4 text-gray-400 hover:text-white focus:outline-none"
               aria-label="Close Modal"
             >
-              {/* SVG Icon for "X" */}
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M6 18L18 6M6 6l12 12"
-                />
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
 
-            <h3 className="text-xl font-semibold mb-4">Payment Successful!</h3>
-            <p className="mb-6">
-              Your tickets have been purchased successfully. Here are your ticket
-              details:
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center font-bold text-xl">
+                ✓
+              </div>
+              <h3 className="text-xl font-bold text-white">Purchase Successful!</h3>
+            </div>
+
+            <p className="text-gray-300 text-sm mb-4">
+              Your tickets have been atomically allocated and confirmed. Here are your ticket details:
             </p>
 
             {/* Scrollable Ticket List */}
-            <div className="mb-6">
-              <ul className="max-h-60 overflow-y-auto px-2">
+            <div className="mb-6 bg-gray-800 rounded-lg p-3 border border-gray-700 max-h-60 overflow-y-auto">
+              <ul className="space-y-2">
                 {purchasedTickets.map((ticket, index) => (
-                  <li
-                    key={ticket.id}
-                    className="text-gray-700 py-1 border-b last:border-none"
-                  >
-                    <span className="font-medium">Ticket {index + 1}:</span> ID{" "}
-                    {ticket.ticketId}, Price LKR {ticket.price.toLocaleString()}
+                  <li key={ticket.id || index} className="text-xs py-2 px-3 bg-gray-700/60 rounded border border-gray-600 flex justify-between items-center">
+                    <div>
+                      <span className="font-semibold text-blue-300">Ticket #{index + 1}</span>
+                      <p className="text-gray-400 font-mono text-[11px]">ID: {ticket.id || ticket.ticketId}</p>
+                    </div>
+                    <span className="font-semibold text-green-400">LKR {ticket.price ? ticket.price.toLocaleString() : "2,800"}</span>
                   </li>
                 ))}
               </ul>
             </div>
 
-            <div className="flex justify-end space-x-4">
+            <div className="flex justify-end space-x-3">
               <button
                 onClick={handleGoHome}
-                className="px-4 py-2 bg-gray-300 text-gray-800 rounded hover:bg-gray-400"
+                className="px-4 py-2 bg-gray-700 text-gray-200 rounded hover:bg-gray-600 text-sm font-medium transition-colors"
               >
                 Go to Home
               </button>
               <button
                 onClick={handleViewTickets}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium transition-colors"
               >
-                View Tickets
+                View My Tickets
               </button>
             </div>
           </div>

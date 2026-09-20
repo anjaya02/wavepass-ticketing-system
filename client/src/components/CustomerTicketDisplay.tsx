@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import axios from "axios";
-import { io, Socket } from "socket.io-client"; 
+import api from "../services/api";
+import { useSocket } from "../context/SocketContext";
 
 interface EventData {
   eventDate: string;
@@ -14,48 +14,22 @@ const TicketDisplay: React.FC = () => {
   const [eventData, setEventData] = useState<EventData | null>(null);
   const [selectedTickets, setSelectedTickets] = useState<number>(1);
   const [message, setMessage] = useState<string>("");
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [isFetching, setIsFetching] = useState<boolean>(false);
+  const [isFetching, setIsFetching] = useState<boolean>(true);
 
   const navigate = useNavigate();
+  const { socket } = useSocket();
 
   // Fetch event data from the backend
   useEffect(() => {
     const fetchEventData = async () => {
       setIsFetching(true);
       try {
-        const token = localStorage.getItem("authToken");
-        console.log("Retrieved Token:", token); 
-
-        if (!token) {
-          throw new Error("Authentication token is missing. Please log in.");
-        }
-
-        const response = await axios.get<EventData>(
-          "http://localhost:5000/api/customers/available-tickets",
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          }
-        );
-
+        const response = await api.get<EventData>("/customers/available-tickets");
         setEventData(response.data);
-        setIsFetching(false); 
       } catch (error: unknown) {
-        if (axios.isAxiosError(error)) {
-          console.error(
-            "Error fetching event data:",
-            error.response?.data || error.message
-          );
-          setMessage(
-            error.response?.data?.message ||
-              "An error occurred while fetching event data."
-          );
-        } else {
-          console.error("Unexpected error:", error);
-          setMessage("An unexpected error occurred.");
-        }
+        console.error("Error fetching available tickets:", error);
+        setMessage("Unable to load ticket availability. Please try again.");
+      } finally {
         setIsFetching(false);
       }
     };
@@ -63,34 +37,31 @@ const TicketDisplay: React.FC = () => {
     fetchEventData();
   }, []);
 
+  // Real-time updates via shared Socket.IO connection
   useEffect(() => {
-    const socket: Socket = io("http://localhost:5000");
+    if (!socket) return;
 
-    socket.on(
-      "availableTicketsUpdate",
-      (data: { eventDate: string; availableTickets: number }) => {
-        if (eventData && data.eventDate === eventData.eventDate) {
-          setEventData((prevData) =>
-            prevData
-              ? { ...prevData, availableTickets: data.availableTickets }
-              : prevData
-          );
-        }
-      }
-    );
+    const handleTicketUpdate = (data: { availableTickets: number }) => {
+      setEventData((prev) =>
+        prev ? { ...prev, availableTickets: data.availableTickets } : prev
+      );
+    };
+
+    socket.on("ticketUpdate", handleTicketUpdate);
 
     return () => {
-      socket.disconnect();
+      socket.off("ticketUpdate", handleTicketUpdate);
     };
-  }, [eventData]);
+  }, [socket]);
 
   // Handle ticket selection change
   const handleTicketChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = parseInt(e.target.value, 10);
+    if (isNaN(value)) return;
 
     if (eventData) {
       if (value > eventData.availableTickets) {
-        setSelectedTickets(eventData.availableTickets);
+        setSelectedTickets(Math.max(1, eventData.availableTickets));
       } else if (value < 1) {
         setSelectedTickets(1);
       } else {
@@ -100,166 +71,102 @@ const TicketDisplay: React.FC = () => {
   };
 
   // Handle proceed to payment
-  const handleProceedToPayment = async () => {
-    if (eventData) {
-      try {
-        setIsLoading(true); // Start loading
-
-        // Store selected tickets in localStorage
-        localStorage.setItem("selectedTickets", selectedTickets.toString());
-
-        // Simulate payment processing delay (optional)
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-
-        navigate("/customer/payment");
-        setIsLoading(false); // End loading
-      } catch (error) {
-        console.error("Payment processing error:", error); // Log error to console
-        setMessage("An error occurred during payment processing.");
-        setIsLoading(false); // Ensure loading ends even if there's an error
-      }
+  const handleProceedToPayment = () => {
+    if (eventData && eventData.availableTickets > 0) {
+      localStorage.setItem("selectedTickets", selectedTickets.toString());
+      navigate("/customer/payment");
     } else {
-      setMessage("Event details are not available.");
+      setMessage("No tickets available to purchase.");
     }
   };
 
-  // Handle navigation to Purchased Tickets
-  const handleViewPurchasedTickets = () => {
-    navigate("/customer/purchasedTickets");
-  };
+  if (isFetching) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-800 text-white">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+          <p className="text-gray-400">Loading boat ride availability...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-800 px-4">
-      <div className="w-full max-w-lg bg-gray-900 p-8 rounded-lg shadow-md">
-        <h2 className="text-2xl font-semibold text-center text-white mb-6">
-          Available Tickets
-        </h2>
+    <div className="min-h-screen bg-gray-800 flex items-center justify-center p-4">
+      <div className="max-w-md w-full bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-8">
+        <div className="text-center mb-6">
+          <h1 className="text-2xl font-bold text-white mb-2">WavePass Boat Rides</h1>
+          <p className="text-gray-400 text-sm">Real-time concurrent ticketing availability</p>
+        </div>
 
         {message && (
-          <div
-            className={`mb-4 text-center text-sm p-2 rounded ${
-              message.includes("successful")
-                ? "bg-green-500 text-white"
-                : "bg-red-500 text-white"
-            }`}
-          >
+          <div className="mb-4 p-3 bg-red-900/80 border border-red-500 rounded text-red-200 text-sm text-center">
             {message}
           </div>
         )}
 
-        {isFetching ? (
-          <p className="text-gray-400 text-center">
-            Loading event details...
-          </p>
-        ) : eventData ? (
-          <div>
-            {/* Event Date */}
-            <div className="mb-4">
-              <p className="text-gray-300">
-                <span className="font-medium">Event Date:</span>{" "}
-                {new Date(eventData.eventDate).toLocaleDateString()}
-              </p>
+        {eventData ? (
+          <div className="space-y-6">
+            {/* Status Card */}
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-5">
+              <div className="flex justify-between items-center mb-3">
+                <span className="text-gray-400 text-sm">Event Date:</span>
+                <span className="text-white font-semibold">{eventData.eventDate}</span>
+              </div>
+              <div className="flex justify-between items-center mb-3">
+                <span className="text-gray-400 text-sm">Ticket Price:</span>
+                <span className="text-green-400 font-bold text-lg">LKR {eventData.ticketPrice.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between items-center pt-2 border-t border-gray-700">
+                <span className="text-gray-400 text-sm">Available Seats:</span>
+                <span
+                  className={`font-bold px-3 py-1 rounded text-sm ${
+                    eventData.availableTickets > 0
+                      ? "bg-green-900/60 text-green-300 border border-green-600"
+                      : "bg-red-900/60 text-red-300 border border-red-600"
+                  }`}
+                >
+                  {eventData.availableTickets} / {eventData.maxTicketCapacity}
+                </span>
+              </div>
             </div>
 
-            {/* Ticket Price */}
-            <div className="mb-4">
-              <p className="text-gray-300">
-                <span className="font-medium">Ticket Price:</span> LKR{" "}
-                {eventData.ticketPrice.toLocaleString()}
-              </p>
-            </div>
+            {/* Selection Form */}
+            {eventData.availableTickets > 0 ? (
+              <div className="space-y-4">
+                <div>
+                  <label htmlFor="ticketQuantity" className="block text-gray-300 text-sm font-medium mb-2">
+                    Quantity:
+                  </label>
+                  <input
+                    type="number"
+                    id="ticketQuantity"
+                    min="1"
+                    max={eventData.availableTickets}
+                    value={selectedTickets}
+                    onChange={handleTicketChange}
+                    className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-gray-400 text-xs mt-1">
+                    Total: LKR {(selectedTickets * eventData.ticketPrice).toLocaleString()}
+                  </p>
+                </div>
 
-            {/* Available Tickets */}
-            <div className="mb-4">
-              <p className="text-gray-300">
-                <span className="font-medium">
-                  Available Tickets to purchase:
-                </span>{" "}
-                {eventData.availableTickets}
-              </p>
-            </div>
-
-            {/* Select Number of Tickets */}
-            <div className="mb-6">
-              <label
-                htmlFor="tickets"
-                className="block text-gray-300 mb-2 font-medium"
-              >
-                Select Tickets:
-              </label>
-              <input
-                type="number"
-                id="tickets"
-                name="tickets"
-                min="1"
-                max={eventData.availableTickets}
-                value={selectedTickets}
-                onChange={handleTicketChange}
-                className="w-full px-3 py-2 border border-gray-700 rounded bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                required
-              />
-              <p className="text-gray-400 text-sm mt-1">
-                You can purchase up to {eventData.availableTickets} tickets.
-              </p>
-            </div>
-
-            {/* Display Total */}
-            <div className="mb-6">
-              <p className="text-gray-300">
-                <span className="font-medium">Total:</span> LKR{" "}
-                {(selectedTickets * eventData.ticketPrice).toLocaleString()}
-              </p>
-            </div>
-
-            {/* Proceed to Payment Button */}
-            <button
-              onClick={handleProceedToPayment}
-              className={`w-full py-2 px-4 bg-green-600 text-white font-semibold rounded hover:bg-green-700 transition-colors flex items-center justify-center ${
-                isLoading ? "opacity-50 cursor-not-allowed" : ""
-              }`}
-              disabled={isLoading}
-            >
-              {isLoading ? (
-                <>
-                  <svg
-                    className="animate-spin h-5 w-5 mr-3 inline-block"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                  >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    ></circle>
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4.22 4.22a.75.75 0 011.06 0L12 10.94l6.72-6.72a.75.75 0 111.06 1.06L13.06 12l6.72 6.72a.75.75 0 11-1.06 1.06L12 13.06l-6.72 6.72a.75.75 0 11-1.06-1.06L10.94 12 4.22 5.28a.75.75 0 010-1.06z"
-                    ></path>
-                  </svg>
-                  Processing...
-                </>
-              ) : (
-                "Proceed to Payment"
-              )}
-            </button>
-
-            {/* View Purchased Tickets Button */}
-            <button
-              onClick={handleViewPurchasedTickets}
-              className="w-full py-2 px-4 mt-4 bg-blue-600 text-white font-semibold rounded hover:bg-blue-700 transition-colors"
-            >
-              View Purchased Tickets
-            </button>
+                <button
+                  onClick={handleProceedToPayment}
+                  className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-md transition-colors"
+                >
+                  Proceed to Checkout
+                </button>
+              </div>
+            ) : (
+              <div className="text-center py-4 bg-gray-800/60 border border-gray-700 rounded-lg text-amber-300 text-sm">
+                ⚠️ All tickets currently sold out. Vendors release tickets periodically.
+              </div>
+            )}
           </div>
         ) : (
-          <p className="text-gray-400 text-center">
-            No event data available.
-          </p>
+          <div className="text-center text-gray-400">No event data currently available.</div>
         )}
       </div>
     </div>

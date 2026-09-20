@@ -1,123 +1,93 @@
 const express = require("express");
 const router = express.Router();
+const { body } = require("express-validator");
 const {
   registerVendor,
   loginVendor,
+} = require("../controllers/authController");
+const {
   addTickets,
   startReleasingTickets,
   stopReleasingTickets,
-  getTicketPoolStatus,
+  deleteAvailableTickets,
   getVendorTickets,
-  getVendorReleasedTickets, 
+  getVendorReleasedTickets,
   getTotalReleasedTickets,
   getVendorSoldTickets,
+  getTicketPoolStatus,
 } = require("../controllers/vendorControllers");
-const authenticateToken = require("../middleware/authenticateToken");
-const { body, validationResult } = require("express-validator");
-const ticketPool = require("../classes/TicketPool");
+const authenticate = require("../middleware/authenticateToken");
+const authorizeRole = require("../middleware/authorizeRole");
+const validate = require("../middleware/validate");
+const { authLimiter } = require("../middleware/rateLimiter");
 
-// Vendor Registration Route
+// Vendor Registration
 router.post(
   "/register",
+  authLimiter,
   [
-    body("name").notEmpty().withMessage("Name is required."),
-    body("email").isEmail().withMessage("Please provide a valid email."),
+    body("name").trim().notEmpty().withMessage("Name is required."),
+    body("email").trim().isEmail().withMessage("Please provide a valid email address."),
     body("password")
       .isLength({ min: 6 })
       .withMessage("Password must be at least 6 characters long."),
+    validate,
   ],
-  (req, res, next) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-    next();
-  },
   registerVendor
 );
 
-// Vendor Login Route
-router.post("/login", loginVendor);
+// Vendor Login
+router.post(
+  "/login",
+  authLimiter,
+  [
+    body("email").trim().isEmail().withMessage("Please provide a valid email address."),
+    body("password").notEmpty().withMessage("Password is required."),
+    validate,
+  ],
+  loginVendor
+);
 
-// Apply Authentication Middleware to Protected Routes Globally
-router.use(authenticateToken);
+// All routes below require authentication and vendor role
+router.use(authenticate);
+router.use(authorizeRole("vendor"));
 
-// Protected Route: Delete Available Tickets
-router.delete("/delete-available-tickets", async (req, res) => {
-  try {
-    const deletedCount = await ticketPool.deleteAvailableTickets();
-    res.status(200).json({
-      message: `Successfully deleted ${deletedCount} available tickets.`,
-      deletedCount,
-    });
-  } catch (error) {
-    console.error("Error deleting tickets:", error);
-    res.status(500).json({
-      message: "Error deleting tickets.",
-      error: error.message,
-    });
-  }
-});
-
-// Example Protected Route
-router.get("/protected", (req, res) => {
-  res.status(200).json({
-    message: `Welcome, ${req.user.name}! You have access to this protected route.`,
-  });
-});
-
-// Protected Route: Add Tickets with Validation
+// Add tickets directly (batch release)
 router.post(
   "/add-tickets",
   [
     body("ticketCount")
-      .isInt({ min: 1 })
-      .withMessage("ticketCount must be a positive integer."),
+      .isInt({ min: 1, max: 1000 })
+      .withMessage("ticketCount must be an integer between 1 and 1000."),
+    validate,
   ],
-  (req, res, next) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-    next();
-  },
   addTickets
 );
 
-// Protected Route: Start Releasing Tickets with Validation
+// Start automated periodic release
 router.post(
   "/start-release",
   [
     body("ticketsPerRelease")
-      .isInt({ min: 1 })
+      .optional()
+      .isInt({ min: 1, max: 100 })
       .withMessage("ticketsPerRelease must be a positive integer."),
+    validate,
   ],
-  (req, res, next) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-    next();
-  },
   startReleasingTickets
 );
 
-// Protected Route: Get Vendor's Tickets
-router.get('/my-tickets', getVendorTickets);
-
-// Protected Route: Get Vendor's Released Tickets
-router.get('/released-tickets', getVendorReleasedTickets);
-
-// New Route to get total released tickets
-router.get('/total-released-tickets', getTotalReleasedTickets);
-
-// New Route to get sold tickets
-router.get("/sold-tickets", getVendorSoldTickets);
-
-// Protected Route: Stop Releasing Tickets
+// Stop automated periodic release
 router.post("/stop-release", stopReleasingTickets);
 
-// Protected Route: Get Ticket Pool Status
+// Delete available tickets from pool
+router.delete("/delete-available-tickets", deleteAvailableTickets);
+
+// Vendor metrics and tickets
+router.get("/my-tickets", getVendorTickets);
+router.get("/released-tickets", getVendorReleasedTickets);
+router.get("/total-released-tickets", getTotalReleasedTickets);
+router.get("/sold-tickets", getVendorSoldTickets);
 router.get("/ticket-pool", getTicketPoolStatus);
 
 module.exports = router;

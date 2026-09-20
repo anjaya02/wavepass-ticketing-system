@@ -1,16 +1,28 @@
 const mongoose = require("mongoose");
-const dotenv = require("dotenv");
+const logger = require("../utils/logger");
 
-dotenv.config();
+/**
+ * Connect to MongoDB with connection pooling and error resilience.
+ */
+const connectDB = async (uri) => {
+  const connectionUri = uri || process.env.MONGO_URI || "mongodb://localhost:27017/wavepass";
 
-// MongoDB connection function
-const connectDB = async () => {
+  // If already connected, skip reconnecting
+  if (mongoose.connection.readyState >= 1) {
+    return;
+  }
+
   try {
-    await mongoose.connect(process.env.MONGO_URI, {});
-    console.log("MongoDB Connected");
+    await mongoose.connect(connectionUri, {
+      maxPoolSize: 50, // Optimal for concurrent requests
+    });
+    logger.info(`MongoDB Connected successfully to: ${connectionUri.replace(/\/\/.*@/, "//<credentials>@")}`);
   } catch (err) {
-    console.error(err.message);
-    process.exit(1); 
+    logger.error("MongoDB Connection Error: %s", err.message);
+    if (process.env.NODE_ENV !== "test") {
+      process.exit(1);
+    }
+    throw err;
   }
 };
 

@@ -9,6 +9,7 @@ interface SocketContextProps {
 
 const SocketContext = createContext<SocketContextProps>({ socket: null });
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useSocket = () => useContext(SocketContext);
 
 export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -20,7 +21,8 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return;
     }
 
-    const newSocket = io("http://localhost:5000", {
+    const socketUrl = import.meta.env.VITE_WS_URL || import.meta.env.VITE_API_BASE_URL || "http://localhost:5000";
+    const newSocket = io(socketUrl, {
       withCredentials: true,
       auth: {
         token: authToken,

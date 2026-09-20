@@ -1,17 +1,25 @@
 const { createLogger, format, transports } = require("winston");
 
+const isProduction = process.env.NODE_ENV === "production";
+
+/**
+ * Custom Winston logger with structured formatting and log levels
+ */
 const logger = createLogger({
-  level: "info", // Set the minimum level to log
+  level: process.env.LOG_LEVEL || (isProduction ? "info" : "debug"),
   format: format.combine(
-    format.timestamp({
-      format: "YYYY-MM-DD HH:mm:ss",
-    }),
-    format.errors({ stack: true }), 
+    format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
+    format.errors({ stack: true }),
     format.splat(),
-    format.json()
+    isProduction ? format.json() : format.combine(format.colorize(), format.simple())
   ),
-  transports: [new transports.Console()],
-  exitOnError: false, // Do not exit on handled exceptions
+  defaultMeta: { service: "wavepass-ticketing" },
+  transports: [
+    new transports.Console({
+      silent: process.env.NODE_ENV === "test", // Suppress console noise during automated testing
+    }),
+  ],
+  exitOnError: false,
 });
 
 module.exports = logger;

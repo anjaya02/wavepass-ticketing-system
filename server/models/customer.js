@@ -1,7 +1,6 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 
-// Define the Customer Schema
 const customerSchema = new mongoose.Schema(
   {
     name: {
@@ -22,12 +21,11 @@ const customerSchema = new mongoose.Schema(
       required: [true, "Customer mobile number is required."],
       unique: true,
       trim: true,
-      match: [
-        /^(0\d{9})|(\+\d{10,15})$/,
-        "Please enter a valid mobile number. It should start with '0' followed by 9 digits or '+' followed by country code and number.",
-      ],
     },
-    
+    retrievalInterval: {
+      type: Number,
+      default: 15000,
+    },
     ticketsPurchased: [
       {
         type: mongoose.Schema.Types.ObjectId,
@@ -48,7 +46,7 @@ const customerSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Pre-save middleware to hash passwords
+// Pre-save middleware to hash passwords with bcrypt
 customerSchema.pre("save", async function (next) {
   if (!this.isModified("password")) return next();
 
@@ -62,13 +60,19 @@ customerSchema.pre("save", async function (next) {
   }
 });
 
-// Method to compare passwords
+// Compare password helper
 customerSchema.methods.comparePassword = async function (candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
 
-// Prevent OverwriteModelError
-const Customer =
-  mongoose.models.Customer || mongoose.model("Customer", customerSchema);
+// Security: Strip password whenever converted to JSON
+customerSchema.set("toJSON", {
+  transform: (doc, ret) => {
+    delete ret.password;
+    delete ret.__v;
+    return ret;
+  },
+});
 
+const Customer = mongoose.models.Customer || mongoose.model("Customer", customerSchema);
 module.exports = Customer;

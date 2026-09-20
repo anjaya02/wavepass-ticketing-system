@@ -19,6 +19,21 @@ export interface VendorReleasedTickets {
   releasedTickets: number;
 }
 
+export interface TotalReleasedTicketsResponse {
+  message?: string;
+  releasedTickets: number;
+}
+
+export interface SoldTicketsResponse {
+  message?: string;
+  soldTickets: number;
+}
+
+export interface VendorReleasedTicketsResponse {
+  message?: string;
+  releasedTickets: number;
+}
+
 export interface PurchaseSuccess {
   ticketIds: string[];
   availableTickets: number;

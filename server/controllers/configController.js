@@ -1,105 +1,92 @@
 const ConfigurationClass = require("../classes/Configuration");
-const ConfigurationModel = require("../models/configuration"); 
-const logger = require("../utils/logger"); 
-const ticketPool = require('../classes/TicketPool'); 
+const ConfigurationModel = require("../models/configuration");
+const logger = require("../utils/logger");
+const ticketPool = require("../classes/TicketPool");
+const { successResponse, errorResponse } = require("../utils/apiResponse");
 
-// Set or Update the Global Configuration
-const setConfiguration = async ({ totalTickets, ticketReleaseRate, customerRetrievalRate, maxTicketCapacity }) => {
+/**
+ * Set or update global system configuration
+ */
+const setConfiguration = async (req, res, next) => {
   try {
-    // Find the existing configuration
-    let configDoc = await ConfigurationModel.findOne({ singleton: true });
-    
-    if (configDoc) {
-      // Update existing configuration
-      configDoc.totalTickets = totalTickets;
-      configDoc.ticketReleaseRate = ticketReleaseRate;
-      configDoc.customerRetrievalRate = customerRetrievalRate;
-      configDoc.maxTicketCapacity = maxTicketCapacity;
-      await configDoc.save();
-      logger.info("Global configuration updated successfully.");
-    } else {
-      // Create new configuration
-      configDoc = new ConfigurationModel({
-        totalTickets,
-        ticketReleaseRate,
-        customerRetrievalRate,
-        maxTicketCapacity,
-        singleton: true, // Ensure uniqueness
-      });
-      await configDoc.save();
-      logger.info("Global configuration created successfully.");
+    const { totalTickets, ticketReleaseRate, customerRetrievalRate, maxTicketCapacity } = req.body;
+
+    const total = parseInt(totalTickets, 10);
+    const maxCap = parseInt(maxTicketCapacity, 10);
+    const releaseRate = parseInt(ticketReleaseRate, 10);
+    const retrievalRate = parseInt(customerRetrievalRate, 10);
+
+    if (maxCap >= total) {
+      return errorResponse(res, 400, "Max Ticket Capacity must be strictly less than Total Tickets.", "INVALID_CAPACITY");
     }
 
-    // Update the in-memory Configuration singleton
     const configInstance = await ConfigurationClass.getInstance();
-    configInstance.setTotalTickets(totalTickets);
-    configInstance.setTicketReleaseRate(ticketReleaseRate);
-    configInstance.setCustomerRetrievalRate(customerRetrievalRate);
-    configInstance.setMaxTicketCapacity(maxTicketCapacity);
-
-    // Re-initialize TicketPool with new configuration
-    await ticketPool.initialize({
-      totalTickets,
-      ticketReleaseRate,
-      customerRetrievalRate,
-      maxTicketCapacity,
+    const configDoc = await configInstance.updateConfiguration({
+      totalTickets: total,
+      ticketReleaseRate: releaseRate,
+      customerRetrievalRate: retrievalRate,
+      maxTicketCapacity: maxCap,
     });
 
-    return configDoc;
+    // Re-initialize TicketPool with new max capacity
+    await ticketPool.initialize({
+      totalTickets: total,
+      ticketReleaseRate: releaseRate,
+      customerRetrievalRate: retrievalRate,
+      maxTicketCapacity: maxCap,
+    });
+
+    return successResponse(res, 200, "Configuration updated successfully.", {
+      configuration: configDoc,
+    });
   } catch (error) {
-    logger.error("Error in setConfiguration:", error);
-    throw error;
+    next(error);
   }
 };
 
-// Get the Global Configuration
-const getConfiguration = async () => {
+/**
+ * Retrieve global system configuration
+ */
+const getConfiguration = async (req, res, next) => {
   try {
-    const configuration = await ConfigurationModel.findOne({ singleton: true });
+    const configInstance = await ConfigurationClass.getInstance();
+    const configDoc = await ConfigurationModel.findOne({ singleton: true });
 
-    if (!configuration) {
-      return null;
+    if (!configDoc) {
+      return errorResponse(res, 404, "Configuration document not found.", "NOT_FOUND");
     }
 
-    return configuration;
+    return successResponse(res, 200, "Configuration retrieved.", {
+      totalTickets: configDoc.totalTickets,
+      ticketReleaseRate: configDoc.ticketReleaseRate,
+      customerRetrievalRate: configDoc.customerRetrievalRate,
+      maxTicketCapacity: configDoc.maxTicketCapacity,
+    });
   } catch (error) {
-    logger.error("Error in getConfiguration:", error);
-    throw error;
+    next(error);
   }
 };
 
-const resetConfiguration = async () => {
+/**
+ * Reset global configuration to defaults
+ */
+const resetConfiguration = async (req, res, next) => {
   try {
-    const defaultConfig = {
-      totalTickets: 500,
-      ticketReleaseRate: 10000,
-      customerRetrievalRate: 15000,
-      maxTicketCapacity: 200,
-    };
+    const configInstance = await ConfigurationClass.getInstance();
+    const configDoc = await configInstance.resetConfiguration();
 
-    let configuration = await ConfigurationModel.findOne({ singleton: true });
+    await ticketPool.initialize({
+      totalTickets: configDoc.totalTickets,
+      ticketReleaseRate: configDoc.ticketReleaseRate,
+      customerRetrievalRate: configDoc.customerRetrievalRate,
+      maxTicketCapacity: configDoc.maxTicketCapacity,
+    });
 
-    if (configuration) {
-      configuration.totalTickets = defaultConfig.totalTickets;
-      configuration.ticketReleaseRate = defaultConfig.ticketReleaseRate;
-      configuration.customerRetrievalRate = defaultConfig.customerRetrievalRate;
-      configuration.maxTicketCapacity = defaultConfig.maxTicketCapacity;
-      await configuration.save();
-      logger.info("Global configuration reset to default successfully.");
-    } else {
-      // Create default configuration
-      configuration = new ConfigurationModel({
-        ...defaultConfig,
-        singleton: true,
-      });
-      await configuration.save();
-      logger.info("Default global configuration created successfully.");
-    }
-
-    return configuration;
+    return successResponse(res, 200, "Configuration reset to default successfully.", {
+      configuration: configDoc,
+    });
   } catch (error) {
-    logger.error("Error in resetConfiguration:", error);
-    throw error;
+    next(error);
   }
 };
 
