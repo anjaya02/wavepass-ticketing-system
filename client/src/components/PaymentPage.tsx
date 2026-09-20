@@ -171,7 +171,7 @@ const PaymentPage: React.FC = () => {
           Complete Purchase
         </h2>
 
-        {/* Prominent Simulated Payment Disclaimer Badge */}
+        {/* Demo payment notice */}
         <div className="mb-6 p-3 bg-amber-950/60 border border-amber-500/50 rounded-lg text-amber-200 text-xs">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-sm font-bold uppercase tracking-wider text-amber-400">

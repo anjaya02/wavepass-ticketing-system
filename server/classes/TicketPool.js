@@ -24,41 +24,8 @@ const safelyGetIO = () => {
 };
 
 /**
- * ============================================================================
- * CONCURRENCY & ARCHITECTURE DESIGN NOTE:
- * ============================================================================
- * WavePass implements a Producer-Consumer ticketing architecture:
- * - Producers (Vendors): Release tickets into the shared ticket pool.
- * - Consumers (Customers): Retrieve/purchase tickets from the shared ticket pool.
- * - Shared Resource: The Ticket Pool, bounded by maxTicketCapacity.
- *
- * ASYNCHRONOUS CONCURRENCY & RACE-CONDITION PREVENTION:
- * 1. Node.js operates on a single-threaded event loop with an asynchronous, non-blocking I/O
- *    model. Concurrent incoming HTTP requests are processed concurrently as asynchronous
- *    tasks interleaved across event loop ticks (NOT multi-threading).
- *
- * 2. In-Memory Mutual Exclusion (`async-mutex`):
- *    We protect critical sections—specifically checking pool capacity and reserving
- *    space for incoming ticket releases—using an in-memory Mutex. This guarantees that
- *    two concurrent vendor releases cannot interleave their capacity checks and cause
- *    total available tickets to exceed `maxTicketCapacity`.
- *
- * 3. Database-Level Conditional Atomic Operations (`findOneAndUpdate`):
- *    In-memory mutexes only protect state within a single Node.js process. To ensure true
- *    system-level correctness (even across multiple server processes or clustered workers),
- *    ticket purchases and refunds use MongoDB atomic conditional updates.
- *    - For ticket purchase: `Ticket.findOneAndUpdate({ status: 'available' }, ...)`
- *      MongoDB document-level write locks ensure that one and only one consumer can claim
- *      a given ticket document. Overselling and double-allocation are mathematically impossible.
- *    - For ticket refund: `Ticket.findOneAndUpdate({ _id: ticketId, owner: customerId, status: 'sold' }, ...)`
- *      guarantees that only the genuine owner can refund a currently sold ticket,
- *      completely eliminating double-refund race conditions.
- *
- * 4. Lock Duration Optimization:
- *    We keep critical sections minimal. Instead of holding the mutex while performing slow
- *    sequential database queries in a loop, we reserve space under the lock and perform
- *    bulk operations (`insertMany`) to minimize lock contention.
- * ============================================================================
+ * Shared TicketPool repository managing ticket inventory, concurrency locks,
+ * and real-time event notifications.
  */
 class TicketPool {
   #maxCapacity;
